@@ -1,5 +1,5 @@
 import ts from "byots";
-import * as lua from "LuaAST";
+import luau from "LuauAST";
 import { diagnostics } from "Shared/diagnostics";
 import { assert } from "Shared/util/assert";
 import { getOrSetDefault } from "Shared/util/getOrSetDefault";
@@ -7,9 +7,10 @@ import { TransformState } from "TSTransformer";
 import { isBlockLike } from "TSTransformer/typeGuards";
 import { isDefinedAsLet } from "TSTransformer/util/isDefinedAsLet";
 import { getAncestor, skipUpwards } from "TSTransformer/util/traversal";
+import { getFirstConstructSymbol } from "TSTransformer/util/types";
 
 export function transformIdentifierDefined(state: TransformState, node: ts.Identifier) {
-	return lua.create(lua.SyntaxKind.Identifier, {
+	return luau.create(luau.SyntaxKind.Identifier, {
 		name: node.text,
 	});
 }
@@ -84,7 +85,7 @@ export function transformIdentifier(state: TransformState, node: ts.Identifier) 
 	assert(symbol);
 
 	if (state.typeChecker.isUndefinedSymbol(symbol)) {
-		return lua.nil();
+		return luau.nil();
 	} else if (state.typeChecker.isArgumentsSymbol(symbol)) {
 		state.addDiagnostic(diagnostics.noArguments(node));
 	} else if (symbol === state.globalSymbols.globalThis) {
@@ -96,14 +97,23 @@ export function transformIdentifier(state: TransformState, node: ts.Identifier) 
 		return macro(state, node);
 	}
 
+	// TODO is this slow?
+	const constructSymbol = getFirstConstructSymbol(state, node);
+	if (constructSymbol) {
+		const constructorMacro = state.macroManager.getConstructorMacro(constructSymbol);
+		if (constructorMacro) {
+			state.addDiagnostic(diagnostics.noConstructorMacroWithoutNew(node));
+		}
+	}
+
 	if (!ts.isCallExpression(skipUpwards(node).parent) && state.macroManager.getCallMacro(symbol)) {
 		state.addDiagnostic(diagnostics.noMacroWithoutCall(node));
-		return lua.emptyId();
+		return luau.emptyId();
 	}
 
 	// exit here for export let so we don't check hoist later
-	if (symbol.valueDeclaration && symbol.valueDeclaration.getSourceFile() === state.sourceFile) {
-		const exportAccess = state.getModuleIdPropertyAccess(symbol, node);
+	if (symbol.valueDeclaration && symbol.valueDeclaration.getSourceFile() === node.getSourceFile()) {
+		const exportAccess = state.getModuleIdPropertyAccess(symbol);
 		if (exportAccess && isDefinedAsLet(state, symbol)) {
 			return exportAccess;
 		}

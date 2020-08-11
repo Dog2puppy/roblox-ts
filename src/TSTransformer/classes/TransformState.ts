@@ -1,20 +1,23 @@
 import ts from "byots";
-import * as lua from "LuaAST";
-import { ProjectType } from "Shared/constants";
-import { PathTranslator } from "Shared/PathTranslator";
-import { RbxPath, RojoConfig } from "Shared/RojoConfig";
+import luau from "LuauAST";
+import { render, RenderState, renderStatements } from "LuauRenderer";
+import { PathTranslator } from "Shared/classes/PathTranslator";
+import { RbxPath, RbxPathParent, RojoResolver } from "Shared/classes/RojoResolver";
+import { PARENT_FIELD, ProjectType } from "Shared/constants";
+import { diagnostics } from "Shared/diagnostics";
 import { assert } from "Shared/util/assert";
 import { getOrSetDefault } from "Shared/util/getOrSetDefault";
 import * as tsst from "ts-simple-type";
-import { CompileState, GlobalSymbols, MacroManager, RoactSymbolManager } from "TSTransformer";
+import { GlobalSymbols, MacroManager, MultiTransformState, RoactSymbolManager } from "TSTransformer";
 import { createGetService } from "TSTransformer/util/createGetService";
+import { propertyAccessExpressionChain } from "TSTransformer/util/expressionChain";
 import { getModuleAncestor, skipUpwards } from "TSTransformer/util/traversal";
 import originalTS from "typescript";
 
 /**
  * The ID of the Runtime library.
  */
-const RUNTIME_LIB_ID = lua.id("TS");
+const RUNTIME_LIB_ID = luau.id("TS");
 
 export type TryUses = {
 	usesReturn: boolean;
@@ -23,7 +26,7 @@ export type TryUses = {
 };
 
 /**
- * Represents the state of the transformation between TS -> lua AST.
+ * Represents the state of the transformation between TS -> Luau AST.
  */
 export class TransformState {
 	private readonly sourceFileText: string;
@@ -35,20 +38,31 @@ export class TransformState {
 		this.diagnostics.push(diagnostic);
 	}
 
+	public debugRender(node: luau.Node) {
+		return render(new RenderState(), node);
+	}
+
+	public debugRenderList(list: luau.List<luau.Statement>) {
+		return renderStatements(new RenderState(), list);
+	}
+
 	constructor(
-		public readonly compileState: CompileState,
-		public readonly rojoConfig: RojoConfig,
+		public readonly compilerOptions: ts.CompilerOptions,
+		public readonly multiTransformState: MultiTransformState,
+		public readonly rojoResolver: RojoResolver,
 		public readonly pathTranslator: PathTranslator,
 		public readonly runtimeLibRbxPath: RbxPath | undefined,
 		public readonly nodeModulesPath: string,
 		public readonly nodeModulesRbxPath: RbxPath | undefined,
 		public readonly nodeModulesPathMapping: Map<string, string>,
 		public readonly typeChecker: ts.TypeChecker,
+		public readonly resolver: ts.EmitResolver,
 		public readonly globalSymbols: GlobalSymbols,
 		public readonly macroManager: MacroManager,
-		public readonly roactSymbolManager: RoactSymbolManager,
-		public readonly projectType: ProjectType,
-		public readonly sourceFile: ts.SourceFile,
+		public readonly roactSymbolManager: RoactSymbolManager | undefined,
+		public readonly projectType: ProjectType | undefined,
+		public readonly pkgVersion: string | undefined,
+		sourceFile: ts.SourceFile,
 	) {
 		this.sourceFileText = sourceFile.getFullText();
 	}
@@ -84,29 +98,29 @@ export class TransformState {
 		this.tryUsesStack.pop();
 	}
 
-	public readonly prereqStatementsStack = new Array<lua.List<lua.Statement>>();
+	public readonly prereqStatementsStack = new Array<luau.List<luau.Statement>>();
 
 	/**
 	 * Pushes a new prerequisite statement onto the list stack.
 	 * @param statement
 	 */
-	public prereq(statement: lua.Statement) {
-		lua.list.push(this.prereqStatementsStack[this.prereqStatementsStack.length - 1], statement);
+	public prereq(statement: luau.Statement) {
+		luau.list.push(this.prereqStatementsStack[this.prereqStatementsStack.length - 1], statement);
 	}
 
 	/**
 	 * Pushes a new prerequisite list of statement onto the list stack.
 	 * @param statements
 	 */
-	public prereqList(statements: lua.List<lua.Statement>) {
-		lua.list.pushList(this.prereqStatementsStack[this.prereqStatementsStack.length - 1], statements);
+	public prereqList(statements: luau.List<luau.Statement>) {
+		luau.list.pushList(this.prereqStatementsStack[this.prereqStatementsStack.length - 1], statements);
 	}
 
 	/**
-	 * Creates and pushes a new list of `lua.Statement`s onto the prerequisite stack.
+	 * Creates and pushes a new list of `luau.Statement`s onto the prerequisite stack.
 	 */
 	public pushPrereqStatementsStack() {
-		const prereqStatements = lua.list.make<lua.Statement>();
+		const prereqStatements = luau.list.make<luau.Statement>();
 		this.prereqStatementsStack.push(prereqStatements);
 		return prereqStatements;
 	}
@@ -126,12 +140,17 @@ export class TransformState {
 	 */
 	public getLeadingComments(node: ts.Node) {
 		const commentRanges = ts.getLeadingCommentRanges(this.sourceFileText, node.pos) ?? [];
-		return (
-			commentRanges
-				// Filter out non-`ts.SyntaxKind.SingleLineCommentTrivia`oh
-				.filter(commentRange => commentRange.kind === ts.SyntaxKind.SingleLineCommentTrivia)
-				// Map each `ts.CommentRange` to its value without the beginning '//'
-				.map(commentRange => this.sourceFileText.substring(commentRange.pos + 2, commentRange.end))
+		return luau.list.make(
+			...commentRanges.map(commentRange =>
+				luau.comment(
+					this.sourceFileText.substring(
+						commentRange.pos + 2,
+						commentRange.kind === ts.SyntaxKind.SingleLineCommentTrivia
+							? commentRange.end
+							: commentRange.end - 2,
+					),
+				),
+			),
 		);
 	}
 
@@ -161,22 +180,22 @@ export class TransformState {
 	}
 
 	/**
-	 * Returns the expression and prerequisite statements created by `callback`.
+	 * Returns the node and prerequisite statements created by `callback`.
 	 */
-	public capture(callback: () => lua.Expression) {
-		let expression!: lua.Expression;
-		const statements = this.capturePrereqs(() => (expression = callback()));
-		return { expression, statements };
+	public capture<T extends luau.Node>(callback: () => T): [T, luau.List<luau.Statement>] {
+		let node!: T;
+		const prereqs = this.capturePrereqs(() => (node = callback()));
+		return [node, prereqs];
 	}
 
 	/**
 	 *
 	 * @param callback
 	 */
-	public noPrereqs(callback: () => lua.Expression) {
-		let expression!: lua.Expression;
+	public noPrereqs(callback: () => luau.Expression) {
+		let expression!: luau.Expression;
 		const statements = this.capturePrereqs(() => (expression = callback()));
-		assert(lua.list.isEmpty(statements));
+		assert(luau.list.isEmpty(statements));
 		return expression;
 	}
 
@@ -191,68 +210,93 @@ export class TransformState {
 	public usesRuntimeLib = false;
 	public TS(name: string) {
 		this.usesRuntimeLib = true;
-		return lua.create(lua.SyntaxKind.PropertyAccessExpression, {
+		return luau.create(luau.SyntaxKind.PropertyAccessExpression, {
 			expression: RUNTIME_LIB_ID,
 			name,
 		});
 	}
 
 	/**
-	 * Returns a `lua.VariableDeclaration` for RuntimeLib.lua
+	 * Returns a `luau.VariableDeclaration` for RuntimeLib.lua
 	 */
-	public createRuntimeLibImport() {
-		// If the transform state has the game path to the RuntimeLib.lua
+	public createRuntimeLibImport(sourceFile: ts.SourceFile) {
+		// if the transform state has the game path to the RuntimeLib.lua
 		if (this.runtimeLibRbxPath) {
-			const rbxPath = [...this.runtimeLibRbxPath];
-			// Create an expression to obtain the service where RuntimeLib is stored
-			const serviceName = rbxPath.shift();
-			assert(serviceName);
+			if (this.projectType === ProjectType.Game) {
+				// create an expression to obtain the service where RuntimeLib is stored
+				const serviceName = this.runtimeLibRbxPath[0];
+				assert(serviceName);
 
-			let expression: lua.IndexableExpression = createGetService(serviceName);
-			// Iterate through the rest of the path
-			// For each instance in the path, create a new WaitForChild call to be added on to the end of the final expression
-			for (const pathPart of rbxPath) {
-				expression = lua.create(lua.SyntaxKind.MethodCallExpression, {
-					expression,
-					name: "WaitForChild",
-					args: lua.list.make(lua.string(pathPart)),
+				let expression: luau.IndexableExpression = createGetService(serviceName);
+				// iterate through the rest of the path
+				// for each instance in the path, create a new WaitForChild call to be added on to the end of the final expression
+				for (let i = 1; i < this.runtimeLibRbxPath.length; i++) {
+					expression = luau.create(luau.SyntaxKind.MethodCallExpression, {
+						expression,
+						name: "WaitForChild",
+						args: luau.list.make(luau.string(this.runtimeLibRbxPath[i])),
+					});
+				}
+
+				// nest the chain of `WaitForChild`s inside a require call
+				expression = luau.create(luau.SyntaxKind.CallExpression, {
+					expression: luau.globals.require,
+					args: luau.list.make(expression),
+				});
+
+				// create a variable declaration for this call
+				return luau.create(luau.SyntaxKind.VariableDeclaration, {
+					left: RUNTIME_LIB_ID,
+					right: expression,
+				});
+			} else {
+				const sourceOutPath = this.pathTranslator.getOutputPath(sourceFile.fileName);
+				const rbxPath = this.rojoResolver.getRbxPathFromFilePath(sourceOutPath);
+				if (!rbxPath) {
+					this.addDiagnostic(diagnostics.noRojoData(sourceFile));
+					return luau.create(luau.SyntaxKind.VariableDeclaration, {
+						left: RUNTIME_LIB_ID,
+						right: luau.nil(),
+					});
+				}
+
+				return luau.create(luau.SyntaxKind.VariableDeclaration, {
+					left: RUNTIME_LIB_ID,
+					right: luau.create(luau.SyntaxKind.CallExpression, {
+						expression: luau.globals.require,
+						args: luau.list.make(
+							propertyAccessExpressionChain(
+								luau.globals.script,
+								RojoResolver.relative(rbxPath, this.runtimeLibRbxPath).map(v =>
+									v === RbxPathParent ? PARENT_FIELD : v,
+								),
+							),
+						),
+					}),
 				});
 			}
-
-			// Nest the chain of `WaitForChild`s inside a require call
-			expression = lua.create(lua.SyntaxKind.CallExpression, {
-				expression: lua.globals.require,
-				args: lua.list.make(expression),
-			});
-
-			// Create a variable declaration for this call
-			return lua.create(lua.SyntaxKind.VariableDeclaration, {
-				left: RUNTIME_LIB_ID,
-				right: expression,
-			});
 		} else {
-			// Create `_G[script]` index
-			// Packages do not contain their own RuntimeLib and have no way of knowing where the host RuntimeLib is
-			// Third part Lua code that wants to access the TunTimeLib so we pass it to _G[script] = TS
-			// - Osyris
-			return lua.create(lua.SyntaxKind.VariableDeclaration, {
+			// we pass RuntimeLib access to packages via `_G[script] = TS`
+			// access it here via `local TS = _G[script]`
+			return luau.create(luau.SyntaxKind.VariableDeclaration, {
 				left: RUNTIME_LIB_ID,
-				right: lua.create(lua.SyntaxKind.ComputedIndexExpression, {
-					expression: lua.globals._G,
-					index: lua.globals.script,
+				right: luau.create(luau.SyntaxKind.ComputedIndexExpression, {
+					expression: luau.globals._G,
+					index: luau.globals.script,
 				}),
 			});
 		}
 	}
 
 	/**
-	 * Declares and defines a new lua variable. Pushes that new variable to a new lua.TemporaryIdentifier.
+	 * Declares and defines a new Luau variable. Pushes that new variable to a new luau.TemporaryIdentifier.
+	 * Can also be used to initialise a new tempId without a value
 	 * @param expression
 	 */
-	public pushToVar(expression: lua.Expression) {
-		const temp = lua.tempId();
+	public pushToVar(expression: luau.Expression | undefined) {
+		const temp = luau.tempId();
 		this.prereq(
-			lua.create(lua.SyntaxKind.VariableDeclaration, {
+			luau.create(luau.SyntaxKind.VariableDeclaration, {
 				left: temp,
 				right: expression,
 			}),
@@ -261,47 +305,39 @@ export class TransformState {
 	}
 
 	/**
-	 * Uses `state.pushToVar(expression)` unless `lua.isSimple(expression)`
+	 * Uses `state.pushToVar(expression)` unless `luau.isSimple(expression)`
 	 * @param expression the expression to push
 	 */
-	public pushToVarIfComplex<T extends lua.Expression>(
+	public pushToVarIfComplex<T extends luau.Expression>(
 		expression: T,
-	): Extract<T, lua.SimpleTypes> | lua.TemporaryIdentifier {
-		if (lua.isSimple(expression)) {
-			return expression as Extract<T, lua.SimpleTypes>;
+	): Extract<T, luau.SimpleTypes> | luau.TemporaryIdentifier {
+		if (luau.isSimple(expression)) {
+			return expression as Extract<T, luau.SimpleTypes>;
 		}
 		return this.pushToVar(expression);
 	}
 
 	/**
-	 * Uses `state.pushToVar(expression)` unless `lua.isAnyIdentifier(expression)`
+	 * Uses `state.pushToVar(expression)` unless `luau.isAnyIdentifier(expression)`
 	 * @param expression the expression to push
 	 */
-	public pushToVarIfNonId<T extends lua.Expression>(
+	public pushToVarIfNonId<T extends luau.Expression>(
 		expression: T,
-	): Extract<T, lua.SimpleTypes> | lua.TemporaryIdentifier {
-		if (lua.isAnyIdentifier(expression)) {
-			return expression as Extract<T, lua.SimpleTypes>;
+	): Extract<T, luau.SimpleTypes> | luau.TemporaryIdentifier {
+		if (luau.isAnyIdentifier(expression)) {
+			return expression as Extract<T, luau.SimpleTypes>;
 		}
 		return this.pushToVar(expression);
 	}
 
-	/**
-	 *
-	 * @param moduleSymbol
-	 */
 	public getModuleExports(moduleSymbol: ts.Symbol) {
-		return getOrSetDefault(this.compileState.getModuleExportsCache, moduleSymbol, () =>
+		return getOrSetDefault(this.multiTransformState.getModuleExportsCache, moduleSymbol, () =>
 			this.typeChecker.getExportsOfModule(moduleSymbol),
 		);
 	}
 
-	/**
-	 *
-	 * @param moduleSymbol
-	 */
 	public getModuleExportsAliasMap(moduleSymbol: ts.Symbol) {
-		return getOrSetDefault(this.compileState.getModuleExportsAliasMapCache, moduleSymbol, () => {
+		return getOrSetDefault(this.multiTransformState.getModuleExportsAliasMapCache, moduleSymbol, () => {
 			const aliasMap = new Map<ts.Symbol, string>();
 			for (const exportSymbol of this.getModuleExports(moduleSymbol)) {
 				const originalSymbol = ts.skipAlias(exportSymbol, this.typeChecker);
@@ -325,7 +361,7 @@ export class TransformState {
 		return exportSymbol;
 	}
 
-	private readonly moduleIdBySymbol = new Map<ts.Symbol, lua.AnyIdentifier>();
+	private readonly moduleIdBySymbol = new Map<ts.Symbol, luau.AnyIdentifier>();
 
 	private getModuleIdFromSymbol(moduleSymbol: ts.Symbol) {
 		const moduleId = this.moduleIdBySymbol.get(moduleSymbol);
@@ -333,36 +369,21 @@ export class TransformState {
 		return moduleId;
 	}
 
-	/**
-	 *
-	 * @param moduleSymbol
-	 * @param moduleId
-	 */
-	public setModuleIdBySymbol(moduleSymbol: ts.Symbol, moduleId: lua.AnyIdentifier) {
+	public setModuleIdBySymbol(moduleSymbol: ts.Symbol, moduleId: luau.AnyIdentifier) {
 		this.moduleIdBySymbol.set(moduleSymbol, moduleId);
 	}
 
-	/**
-	 *
-	 * @param node
-	 */
 	public getModuleIdFromNode(node: ts.Node) {
 		const moduleSymbol = this.getModuleSymbolFromNode(node);
 		return this.getModuleIdFromSymbol(moduleSymbol);
 	}
 
-	/**
-	 *
-	 * @param idSymbol
-	 * @param identifier
-	 */
-	public getModuleIdPropertyAccess(idSymbol: ts.Symbol, identifier: ts.Identifier) {
+	public getModuleIdPropertyAccess(idSymbol: ts.Symbol) {
 		const moduleSymbol = this.getModuleSymbolFromNode(idSymbol.valueDeclaration);
-		const moduleId = this.getModuleIdFromSymbol(moduleSymbol);
 		const alias = this.getModuleExportsAliasMap(moduleSymbol).get(idSymbol);
 		if (alias) {
-			return lua.create(lua.SyntaxKind.PropertyAccessExpression, {
-				expression: moduleId,
+			return luau.create(luau.SyntaxKind.PropertyAccessExpression, {
+				expression: this.getModuleIdFromSymbol(moduleSymbol),
 				name: alias,
 			});
 		}

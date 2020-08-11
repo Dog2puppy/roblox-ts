@@ -1,35 +1,41 @@
 import ts from "byots";
-import * as lua from "LuaAST";
+import luau from "LuauAST";
 import { assert } from "Shared/util/assert";
 import { TransformState } from "TSTransformer";
 import { transformExpression } from "TSTransformer/nodes/expressions/transformExpression";
 import { ensureTransformOrder } from "TSTransformer/util/ensureTransformOrder";
-import { isArrayType } from "TSTransformer/util/types";
 import { createArrayPointer, disableArrayInline } from "TSTransformer/util/pointer";
+import { isArrayType } from "TSTransformer/util/types";
 
 export function transformArrayLiteralExpression(state: TransformState, node: ts.ArrayLiteralExpression) {
 	if (!node.elements.find(element => ts.isSpreadElement(element))) {
-		return lua.create(lua.SyntaxKind.Array, {
-			members: lua.list.make(...ensureTransformOrder(state, node.elements)),
+		return luau.create(luau.SyntaxKind.Array, {
+			members: luau.list.make(...ensureTransformOrder(state, node.elements)),
 		});
 	}
 
 	const ptr = createArrayPointer();
-	const lengthId = lua.tempId();
+	const lengthId = luau.tempId();
 	let lengthInitialized = false;
 	let amtElementsSinceUpdate = 0;
 
 	function updateLengthId() {
-		state.prereq(
-			lua.create(lengthInitialized ? lua.SyntaxKind.Assignment : lua.SyntaxKind.VariableDeclaration, {
-				left: lengthId,
-				right: lua.create(lua.SyntaxKind.UnaryExpression, {
-					operator: "#",
-					expression: ptr.value,
+		const right = luau.unary("#", ptr.value);
+		if (lengthInitialized) {
+			state.prereq(
+				luau.create(luau.SyntaxKind.Assignment, {
+					left: lengthId,
+					operator: "=",
+					right,
 				}),
-			}),
-		);
-		if (!lengthInitialized) {
+			);
+		} else {
+			state.prereq(
+				luau.create(luau.SyntaxKind.VariableDeclaration, {
+					left: lengthId,
+					right,
+				}),
+			);
 			lengthInitialized = true;
 		}
 		amtElementsSinceUpdate = 0;
@@ -39,31 +45,28 @@ export function transformArrayLiteralExpression(state: TransformState, node: ts.
 		const element = node.elements[i];
 		if (ts.isSpreadElement(element)) {
 			assert(isArrayType(state, state.getType(element.expression)));
-			if (lua.isArray(ptr.value)) {
+			if (luau.isArray(ptr.value)) {
 				disableArrayInline(state, ptr);
 				updateLengthId();
 			}
-			assert(lua.isAnyIdentifier(ptr.value));
+			assert(luau.isAnyIdentifier(ptr.value));
 			const spreadExp = transformExpression(state, element.expression);
-			const keyId = lua.tempId();
-			const valueId = lua.tempId();
+			const keyId = luau.tempId();
+			const valueId = luau.tempId();
 			state.prereq(
-				lua.create(lua.SyntaxKind.ForStatement, {
-					ids: lua.list.make(keyId, valueId),
-					expression: lua.create(lua.SyntaxKind.CallExpression, {
-						expression: lua.globals.ipairs,
-						args: lua.list.make(spreadExp),
+				luau.create(luau.SyntaxKind.ForStatement, {
+					ids: luau.list.make(keyId, valueId),
+					expression: luau.create(luau.SyntaxKind.CallExpression, {
+						expression: luau.globals.ipairs,
+						args: luau.list.make(spreadExp),
 					}),
-					statements: lua.list.make(
-						lua.create(lua.SyntaxKind.Assignment, {
-							left: lua.create(lua.SyntaxKind.ComputedIndexExpression, {
+					statements: luau.list.make(
+						luau.create(luau.SyntaxKind.Assignment, {
+							left: luau.create(luau.SyntaxKind.ComputedIndexExpression, {
 								expression: ptr.value,
-								index: lua.create(lua.SyntaxKind.BinaryExpression, {
-									left: lengthId,
-									operator: "+",
-									right: keyId,
-								}),
+								index: luau.binary(lengthId, "+", keyId),
 							}),
+							operator: "=",
 							right: valueId,
 						}),
 					),
@@ -73,25 +76,22 @@ export function transformArrayLiteralExpression(state: TransformState, node: ts.
 				updateLengthId();
 			}
 		} else {
-			const { expression, statements } = state.capture(() => transformExpression(state, element));
-			if (lua.isArray(ptr.value) && !lua.list.isEmpty(statements)) {
+			const [expression, prereqs] = state.capture(() => transformExpression(state, element));
+			if (luau.isArray(ptr.value) && !luau.list.isEmpty(prereqs)) {
 				disableArrayInline(state, ptr);
 				updateLengthId();
 			}
-			if (lua.isArray(ptr.value)) {
-				lua.list.push(ptr.value.members, expression);
+			if (luau.isArray(ptr.value)) {
+				luau.list.push(ptr.value.members, expression);
 			} else {
-				state.prereqList(statements);
+				state.prereqList(prereqs);
 				state.prereq(
-					lua.create(lua.SyntaxKind.Assignment, {
-						left: lua.create(lua.SyntaxKind.ComputedIndexExpression, {
+					luau.create(luau.SyntaxKind.Assignment, {
+						left: luau.create(luau.SyntaxKind.ComputedIndexExpression, {
 							expression: ptr.value,
-							index: lua.create(lua.SyntaxKind.BinaryExpression, {
-								left: lengthId,
-								operator: "+",
-								right: lua.number(amtElementsSinceUpdate + 1),
-							}),
+							index: luau.binary(lengthId, "+", luau.number(amtElementsSinceUpdate + 1)),
 						}),
+						operator: "=",
 						right: expression,
 					}),
 				);

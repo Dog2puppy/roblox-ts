@@ -1,5 +1,5 @@
 import ts from "byots";
-import * as lua from "LuaAST";
+import luau from "LuauAST";
 import { TransformState } from "TSTransformer";
 import { transformExpression } from "TSTransformer/nodes/expressions/transformExpression";
 import { transformStatementList } from "TSTransformer/nodes/transformStatementList";
@@ -9,24 +9,21 @@ import { getStatements } from "TSTransformer/util/getStatements";
 export function transformDoStatement(state: TransformState, node: ts.DoStatement) {
 	const statements = transformStatementList(state, getStatements(node.statement));
 
-	const { expression: condition, statements: conditionPrereqs } = state.capture(() =>
+	const [condition, conditionPrereqs] = state.capture(() =>
 		createTruthinessChecks(state, transformExpression(state, node.expression), state.getType(node.expression)),
 	);
 
-	return lua.list.make(
-		lua.create(lua.SyntaxKind.RepeatStatement, {
-			statements: lua.list.join(
-				lua.list.make(
-					lua.create(lua.SyntaxKind.DoStatement, {
+	return luau.list.make(
+		luau.create(luau.SyntaxKind.RepeatStatement, {
+			statements: luau.list.join(
+				luau.list.make(
+					luau.create(luau.SyntaxKind.DoStatement, {
 						statements,
 					}),
 				),
 				conditionPrereqs,
 			),
-			condition: lua.create(lua.SyntaxKind.UnaryExpression, {
-				operator: "not",
-				expression: condition,
-			}),
+			condition: luau.unary("not", condition),
 		}),
 	);
 }

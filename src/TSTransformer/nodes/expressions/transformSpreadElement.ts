@@ -1,5 +1,5 @@
 import ts from "byots";
-import * as lua from "LuaAST";
+import luau from "LuauAST";
 import { diagnostics } from "Shared/diagnostics";
 import { assert } from "Shared/util/assert";
 import { TransformState } from "TSTransformer";
@@ -10,15 +10,15 @@ import { validateNotAnyType } from "TSTransformer/util/validateNotAny";
 export function transformSpreadElement(state: TransformState, node: ts.SpreadElement) {
 	validateNotAnyType(state, node.expression);
 
-	assert(ts.isCallExpression(node.parent));
+	assert(!ts.isArrayLiteralExpression(node.parent) && node.parent.arguments);
 	if (node.parent.arguments[node.parent.arguments.length - 1] !== node) {
 		state.addDiagnostic(diagnostics.noPrecedingSpreadElement(node));
 	}
 
 	assert(isArrayType(state, state.getType(node.expression)));
 
-	return lua.create(lua.SyntaxKind.CallExpression, {
-		expression: lua.globals.unpack,
-		args: lua.list.make(transformExpression(state, node.expression)),
+	return luau.create(luau.SyntaxKind.CallExpression, {
+		expression: luau.globals.unpack,
+		args: luau.list.make(transformExpression(state, node.expression)),
 	});
 }

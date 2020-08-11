@@ -1,7 +1,7 @@
 import ts from "byots";
-import * as lua from "LuaAST";
-import { TransformState } from "TSTransformer";
+import luau from "LuauAST";
 import { diagnostics } from "Shared/diagnostics";
+import { TransformState } from "TSTransformer";
 
 export function transformThisExpression(state: TransformState, node: ts.ThisExpression) {
 	const symbol = state.typeChecker.getSymbolAtLocation(node);
@@ -9,5 +9,5 @@ export function transformThisExpression(state: TransformState, node: ts.ThisExpr
 		state.addDiagnostic(diagnostics.noGlobalThis(node));
 	}
 
-	return lua.globals.self;
+	return luau.globals.self;
 }

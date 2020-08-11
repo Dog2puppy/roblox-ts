@@ -1,12 +1,7 @@
 local Promise = require(script.Parent.Promise)
 
-local HttpService = game:GetService("HttpService")
 local RunService = game:GetService("RunService")
-
-local ReplicatedFirst
-if not __LEMUR__ then
-	ReplicatedFirst = game:GetService("ReplicatedFirst")
-end
+local ReplicatedFirst = game:GetService("ReplicatedFirst")
 
 local TS = {}
 
@@ -60,12 +55,12 @@ end
 
 -- module resolution
 function TS.getModule(object, moduleName)
-	if not __LEMUR__ and object:IsDescendantOf(ReplicatedFirst) then
+	if RunService:IsRunning() and object:IsDescendantOf(ReplicatedFirst) then
 		warn("roblox-ts packages should not be used from ReplicatedFirst!")
 	end
 
 	-- ensure modules have fully replicated
-	if not __LEMUR__ and RunService:IsClient() and not isPlugin(object) and not game:IsLoaded() then
+	if RunService:IsRunning() and RunService:IsClient() and not isPlugin(object) and not game:IsLoaded() then
 		game.Loaded:Wait()
 	end
 
@@ -234,6 +229,58 @@ function TS.bit_lrsh(a, b)
 	else
 		return -result - 1
 	end
+end
+
+TS.TRY_RETURN = 1
+TS.TRY_BREAK = 2
+TS.TRY_CONTINUE = 3
+
+function TS.try(func, catch, finally)
+	local err, traceback
+	local success, exitType, returns = xpcall(
+		func,
+		function(errInner)
+			err = errInner
+			traceback = debug.traceback()
+		end
+	)
+	if not success and catch then
+		local newExitType, newReturns = catch(err, traceback)
+		if newExitType then
+			exitType, returns = newExitType, newReturns
+		end
+	end
+	if finally then
+		local newExitType, newReturns = finally()
+		if newExitType then
+			exitType, returns = newExitType, newReturns
+		end
+	end
+	return exitType, returns
+end
+
+-- LEGACY RUNTIME FUNCTIONS
+
+local HttpService = game:GetService("HttpService")
+
+function TS.generator(c)
+	c = coroutine.create(c)
+
+	local o = {
+		next = function(...)
+			if coroutine.status(c) == "dead" then
+				return { done = true }
+			else
+				local success, value = coroutine.resume(c, ...)
+				if success == false then error(value, 2) end
+				return { value = value, done = coroutine.status(c) == "dead" }
+			end
+		end
+	}
+
+	o[TS.Symbol_iterator] = function() return o end
+
+	return o
 end
 
 -- utility functions
@@ -795,6 +842,8 @@ function TS.map_new(pairs)
 	return result
 end
 
+TS.Object_fromEntries = TS.map_new
+
 function TS.map_clear(map)
 	for key in pairs(map) do
 		map[key] = nil
@@ -904,6 +953,36 @@ TS.set_size = getNumKeys
 
 TS.set_toString = toString
 
+function TS.string_startsWith(str1, str2, pos)
+	local n1 = #str1
+	local n2 = #str2
+
+	if pos == nil or pos ~= pos then
+		pos = 0
+	else
+		pos = math.clamp(pos, 0, n1)
+	end
+
+	local last = pos + n2;
+	return last <= n1 and string.sub(str1, pos + 1, last) == str2
+end
+
+function TS.string_endsWith(str1, str2, pos)
+	local n1 = #str1
+	local n2 = #str2
+
+	if pos == nil then
+		pos = n1
+	elseif pos ~= pos then
+		pos = 0
+	else
+		pos = math.clamp(pos, 0, n1)
+	end
+
+	local start = pos - n2 + 1;
+	return start > 0 and string.sub(str1, start, pos) == str2
+end
+
 -- spread cache functions
 function TS.string_spread(str)
 	local results = {}
@@ -972,34 +1051,6 @@ function TS.opcall(func, ...)
 			error = valueOrErr,
 		}
 	end
-end
-
-TS.TRY_RETURN = 1
-TS.TRY_BREAK = 2
-TS.TRY_CONTINUE = 3
-
-function TS.try(func, catch, finally)
-	local err, traceback
-	local success, exitType, returns = xpcall(
-		func,
-		function(errInner)
-			err = errInner
-			traceback = debug.traceback()
-		end
-	)
-	if not success and catch then
-		local newExitType, newReturns = catch(err, traceback)
-		if newExitType then
-			exitType, returns = newExitType, newReturns
-		end
-	end
-	if finally then
-		local newExitType, newReturns = finally()
-		if newExitType then
-			exitType, returns = newExitType, newReturns
-		end
-	end
-	return exitType, returns
 end
 
 return TS

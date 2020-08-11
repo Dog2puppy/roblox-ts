@@ -1,56 +1,87 @@
 import ts from "byots";
-import * as lua from "LuaAST";
+import luau from "LuauAST";
 import { TransformState } from "TSTransformer";
 import { transformExpression } from "TSTransformer/nodes/expressions/transformExpression";
-import {
-	transformWritableAssignmentWithType,
-	transformWritableExpressionWithType,
-} from "TSTransformer/nodes/transformWritable";
+import { transformWritableAssignment, transformWritableExpression } from "TSTransformer/nodes/transformWritable";
 import { isUnaryAssignmentOperator } from "TSTransformer/typeGuards";
-import { createAssignmentStatement, createCompoundAssignmentStatement } from "TSTransformer/util/assignment";
-import { createNodeWithType } from "TSTransformer/util/createNodeWithType";
+import { createCompoundAssignmentStatement, getSimpleAssignmentOperator } from "TSTransformer/util/assignment";
 import { skipDownwards } from "TSTransformer/util/traversal";
+import { isStringSimpleType } from "TSTransformer/util/types";
+import { wrapToString } from "TSTransformer/util/wrapToString";
 
 function transformUnaryExpressionStatement(
 	state: TransformState,
 	node: ts.PrefixUnaryExpression | ts.PostfixUnaryExpression,
 ) {
-	const writable = transformWritableExpressionWithType(state, node.operand, true);
-	return createCompoundAssignmentStatement(writable, writable, node.operator, createNodeWithType(lua.number(1)));
+	const writable = transformWritableExpression(state, node.operand, false);
+	const operator: luau.AssignmentOperator = node.operator === ts.SyntaxKind.PlusPlusToken ? "+=" : "-=";
+	return luau.create(luau.SyntaxKind.Assignment, {
+		left: writable,
+		operator,
+		right: luau.number(1),
+	});
 }
 
 export function transformExpressionStatementInner(state: TransformState, expression: ts.Expression) {
 	if (ts.isBinaryExpression(expression)) {
-		const operator = expression.operatorToken.kind;
-		if (ts.isAssignmentOperator(operator) && !ts.isArrayLiteralExpression(expression.left)) {
-			const { writable, readable, value } = transformWritableAssignmentWithType(
+		const operatorKind = expression.operatorToken.kind;
+		if (
+			ts.isAssignmentOperator(operatorKind) &&
+			!ts.isArrayLiteralExpression(expression.left) &&
+			!ts.isObjectLiteralExpression(expression.left)
+		) {
+			const writableType = state.getType(expression.left);
+			const valueType = state.getType(expression.right);
+			const rightSimpleType = state.getSimpleType(valueType);
+			const operator = getSimpleAssignmentOperator(
+				state.getSimpleType(writableType),
+				operatorKind as ts.AssignmentOperator,
+				rightSimpleType,
+			);
+			const { writable, readable, value } = transformWritableAssignment(
 				state,
 				expression.left,
 				expression.right,
-				ts.isCompoundAssignment(operator),
+				operator === undefined,
 			);
-			if (ts.isCompoundAssignment(operator)) {
-				return lua.list.make(createCompoundAssignmentStatement(writable, readable, operator, value));
+			if (operator !== undefined) {
+				return luau.list.make(
+					luau.create(luau.SyntaxKind.Assignment, {
+						left: writable,
+						operator,
+						right: operator === "..=" && !isStringSimpleType(rightSimpleType) ? wrapToString(value) : value,
+					}),
+				);
 			} else {
-				return lua.list.make(createAssignmentStatement(writable.node, value.node));
+				return luau.list.make(
+					createCompoundAssignmentStatement(
+						state,
+						writable,
+						writableType,
+						readable,
+						operatorKind,
+						value,
+						valueType,
+					),
+				);
 			}
 		}
 	} else if (
 		(ts.isPrefixUnaryExpression(expression) || ts.isPostfixUnaryExpression(expression)) &&
 		isUnaryAssignmentOperator(expression.operator)
 	) {
-		return lua.list.make(transformUnaryExpressionStatement(state, expression));
+		return luau.list.make(transformUnaryExpressionStatement(state, expression));
 	}
 
 	const transformed = transformExpression(state, expression);
-	if (lua.isCall(transformed)) {
-		return lua.list.make(lua.create(lua.SyntaxKind.CallStatement, { expression: transformed }));
-	} else if (lua.isAnyIdentifier(transformed) || lua.isNilLiteral(transformed)) {
-		return lua.list.make<lua.Statement>();
+	if (luau.isCall(transformed)) {
+		return luau.list.make(luau.create(luau.SyntaxKind.CallStatement, { expression: transformed }));
+	} else if (luau.isAnyIdentifier(transformed) || luau.isNilLiteral(transformed)) {
+		return luau.list.make<luau.Statement>();
 	} else {
-		return lua.list.make(
-			lua.create(lua.SyntaxKind.VariableDeclaration, {
-				left: lua.emptyId(),
+		return luau.list.make(
+			luau.create(luau.SyntaxKind.VariableDeclaration, {
+				left: luau.emptyId(),
 				right: transformed,
 			}),
 		);

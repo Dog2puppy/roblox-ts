@@ -1,8 +1,8 @@
 # roblox-ts TSTransformer
 
-The goal of this project is to take a `ts.SourceFile` and turn it into a `lua.List<lua.Statement>`
+The goal of this project is to take a `ts.SourceFile` and turn it into a `luau.List<luau.Statement>`
 
-In other words, TS AST -> Lua AST
+In other words, TS AST -> Luau AST
 
 ### Features
 
@@ -47,6 +47,7 @@ In other words, TS AST -> Lua AST
 -   [x] OmittedExpression
 -   [x] ThisExpression
 -   [x] SuperExpression
+-   [x] VoidExpression
 -   [x] JsxSelfClosingElement
 -   [x] JsxExpression
 
@@ -120,14 +121,15 @@ In other words, TS AST -> Lua AST
 
 ### Object Macros
 
--   [ ] Object.keys()
--   [ ] Object.values()
--   [ ] Object.entries()
+-   [x] Object.keys()
+-   [x] Object.values()
+-   [x] Object.entries()
 -   [ ] Object.assign()
 -   [x] Object.copy()
 -   [ ] Object.deepCopy()
 -   [ ] Object.deepEquals()
 -   [ ] Object.toString()
+-   [x] Object.isEmpty()
 
 ### Array Macros
 
@@ -135,37 +137,37 @@ In other words, TS AST -> Lua AST
 -   [ ] ArrayLike.get()
 -   [x] ReadonlyArray.isEmpty()
 -   [ ] ReadonlyArray.toString()
--   [ ] ReadonlyArray.concat()
+-   [x] ReadonlyArray.concat()
 -   [x] ReadonlyArray.join()
--   [ ] ReadonlyArray.slice()
--   [ ] ReadonlyArray.includes()
--   [ ] ReadonlyArray.indexOf()
--   [ ] ReadonlyArray.lastIndexOf()
+-   [x] ReadonlyArray.slice()
+-   [x] ReadonlyArray.includes()
+-   [x] ReadonlyArray.indexOf()
+-   [x] ReadonlyArray.lastIndexOf()
 -   [x] ReadonlyArray.every()
 -   [x] ReadonlyArray.some()
 -   [x] ReadonlyArray.forEach()
 -   [x] ReadonlyArray.map()
--   [ ] ReadonlyArray.mapFiltered()
--   [ ] ReadonlyArray.filterUndefined()
--   [ ] ReadonlyArray.filter()
--   [ ] ReadonlyArray.reduce()
--   [ ] ReadonlyArray.reduceRight()
+-   [x] ReadonlyArray.mapFiltered()
+-   [x] ReadonlyArray.filterUndefined()
+-   [x] ReadonlyArray.filter()
+-   [x] ReadonlyArray.reduce()
+-   [x] ReadonlyArray.reduceRight()
 -   [x] ReadonlyArray.reverse()
--   [ ] ReadonlyArray.entries()
--   [ ] ReadonlyArray.find()
--   [ ] ReadonlyArray.findIndex()
--   [ ] ReadonlyArray.copy()
+-   [x] ReadonlyArray.entries()
+-   [x] ReadonlyArray.find()
+-   [x] ReadonlyArray.findIndex()
+-   [x] ReadonlyArray.copy()
 -   [ ] ReadonlyArray.deepCopy()
 -   [ ] ReadonlyArray.deepEquals()
--   [ ] ReadonlyArray.sort()
+-   [x] ReadonlyArray.sort()
 -   [x] Array.push()
 -   [x] Array.pop()
--   [ ] Array.shift()
--   [ ] Array.unshift()
+-   [x] Array.shift()
+-   [x] Array.unshift()
 -   [ ] Array.copyWithin()
--   [ ] Array.insert()
--   [ ] Array.remove()
--   [ ] Array.unorderedRemove()
+-   [x] Array.insert()
+-   [x] Array.remove()
+-   [x] Array.unorderedRemove()
 
 ### Set Macros
 
@@ -173,7 +175,7 @@ In other words, TS AST -> Lua AST
 -   [ ] ReadonlySet.toString()
 -   [x] ReadonlySet.forEach()
 -   [x] ReadonlySet.size()
--   [ ] ReadonlySet.values()
+-   [x] ReadonlySet.values()
 -   [x] ReadonlySet.has()
 -   [ ] ReadonlySet.union()
 -   [ ] ReadonlySet.intersect()
@@ -188,13 +190,13 @@ In other words, TS AST -> Lua AST
 
 -   [x] ReadonlyMap.isEmpty()
 -   [ ] ReadonlyMap.toString()
--   [ ] ReadonlyMap.forEach()
+-   [x] ReadonlyMap.forEach()
 -   [x] ReadonlyMap.size()
--   [ ] ReadonlyMap.values()
+-   [x] ReadonlyMap.values()
 -   [x] ReadonlyMap.has()
 -   [x] ReadonlyMap.get()
--   [ ] ReadonlyMap.entries()
--   [ ] ReadonlyMap.keys()
+-   [x] ReadonlyMap.entries()
+-   [x] ReadonlyMap.keys()
 -   [x] Map.set()
 -   [x] Map.delete()
 -   [x] Map.clear()
@@ -206,8 +208,8 @@ In other words, TS AST -> Lua AST
 -   [ ] String.endsWith()
 -   [x] String.find()
 -   [x] String.format()
--   [ ] String.includes()
--   [ ] String.indexOf()
+-   [x] String.includes()
+-   [x] String.indexOf()
 -   [ ] String.padEnd()
 -   [ ] String.padStart()
 -   [x] String.size()

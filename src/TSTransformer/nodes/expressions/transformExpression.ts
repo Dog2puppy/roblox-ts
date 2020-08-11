@@ -1,5 +1,5 @@
 import ts from "byots";
-import * as lua from "LuaAST";
+import luau from "LuauAST";
 import { DiagnosticFactory, diagnostics } from "Shared/diagnostics";
 import { assert } from "Shared/util/assert";
 import { TransformState } from "TSTransformer";
@@ -13,6 +13,8 @@ import { transformConditionalExpression } from "TSTransformer/nodes/expressions/
 import { transformElementAccessExpression } from "TSTransformer/nodes/expressions/transformElementAccessExpression";
 import { transformFunctionExpression } from "TSTransformer/nodes/expressions/transformFunctionExpression";
 import { transformIdentifier } from "TSTransformer/nodes/expressions/transformIdentifier";
+import { transformJsxElement } from "TSTransformer/nodes/expressions/transformJsxElement";
+import { transformJsxSelfClosingElement } from "TSTransformer/nodes/expressions/transformJsxSelfClosingElement";
 import {
 	transformFalseKeyword,
 	transformNumericLiteral,
@@ -32,17 +34,16 @@ import {
 	transformPostfixUnaryExpression,
 	transformPrefixUnaryExpression,
 } from "TSTransformer/nodes/expressions/transformUnaryExpression";
+import { transformVoidExpression } from "TSTransformer/nodes/expressions/transformVoidExpression";
 import { getKindName } from "TSTransformer/util/getKindName";
-import { transformJsxElement } from "TSTransformer/nodes/expressions/transformJsxElement";
-import { transformJsxSelfClosingElement } from "TSTransformer/nodes/expressions/transformJsxSelfClosingElement";
 
 const DIAGNOSTIC = (factory: DiagnosticFactory) => (state: TransformState, node: ts.Statement) => {
 	state.addDiagnostic(factory(node));
-	return lua.emptyId();
+	return luau.emptyId();
 };
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-type ExpressionTransformer = (state: TransformState, node: any) => lua.Expression;
+type ExpressionTransformer = (state: TransformState, node: any) => luau.Expression;
 
 const TRANSFORMER_BY_KIND = new Map<ts.SyntaxKind, ExpressionTransformer>([
 	// banned expressions
@@ -50,7 +51,6 @@ const TRANSFORMER_BY_KIND = new Map<ts.SyntaxKind, ExpressionTransformer>([
 	[ts.SyntaxKind.NullKeyword, DIAGNOSTIC(diagnostics.noNullLiteral)],
 	[ts.SyntaxKind.PrivateIdentifier, DIAGNOSTIC(diagnostics.noPrivateIdentifier)],
 	[ts.SyntaxKind.TypeOfExpression, DIAGNOSTIC(diagnostics.noTypeOfExpression)],
-	[ts.SyntaxKind.VoidExpression, DIAGNOSTIC(diagnostics.noVoidExpression)],
 	[ts.SyntaxKind.RegularExpressionLiteral, DIAGNOSTIC(diagnostics.noRegex)],
 
 	// regular transforms
@@ -83,12 +83,13 @@ const TRANSFORMER_BY_KIND = new Map<ts.SyntaxKind, ExpressionTransformer>([
 	[ts.SyntaxKind.TemplateExpression, transformTemplateExpression],
 	[ts.SyntaxKind.ThisKeyword, transformThisExpression],
 	[ts.SyntaxKind.TrueKeyword, transformTrueKeyword],
+	[ts.SyntaxKind.VoidExpression, transformVoidExpression],
 ]);
 
-export function transformExpression(state: TransformState, node: ts.Expression): lua.Expression {
+export function transformExpression(state: TransformState, node: ts.Expression): luau.Expression {
 	const transformer = TRANSFORMER_BY_KIND.get(node.kind);
 	if (transformer) {
 		return transformer(state, node);
 	}
-	assert(false, `Unknown expression: ${getKindName(node)}`);
+	assert(false, `Unknown expression: ${getKindName(node.kind)}`);
 }

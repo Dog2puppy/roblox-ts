@@ -1,11 +1,12 @@
 import ts from "byots";
-import * as lua from "LuaAST";
+import luau from "LuauAST";
 import { diagnostics } from "Shared/diagnostics";
 import { TransformState } from "TSTransformer";
 import { transformExpression } from "TSTransformer/nodes/expressions/transformExpression";
 import { transformMethodDeclaration } from "TSTransformer/nodes/transformMethodDeclaration";
 import { transformObjectKey } from "TSTransformer/nodes/transformObjectKey";
 import { assignToMapPointer, disableMapInline, MapPointer } from "TSTransformer/util/pointer";
+import { canBeUndefined } from "TSTransformer/util/types";
 
 function transformPropertyAssignment(
 	state: TransformState,
@@ -13,46 +14,61 @@ function transformPropertyAssignment(
 	name: ts.Identifier | ts.StringLiteral | ts.NumericLiteral | ts.ComputedPropertyName,
 	initializer: ts.Expression,
 ) {
-	const left = state.capture(() => transformObjectKey(state, name));
-	const right = state.capture(() => transformExpression(state, initializer));
+	const [left, leftPrereqs] = state.capture(() => transformObjectKey(state, name));
+	const [right, rightPrereqs] = state.capture(() => transformExpression(state, initializer));
 
-	if (!lua.list.isEmpty(left.statements) || !lua.list.isEmpty(right.statements)) {
+	if (!luau.list.isEmpty(leftPrereqs) || !luau.list.isEmpty(rightPrereqs)) {
 		disableMapInline(state, ptr);
 	}
 
-	state.prereqList(left.statements);
-	state.prereqList(right.statements);
-	assignToMapPointer(state, ptr, left.expression, right.expression);
+	state.prereqList(leftPrereqs);
+	state.prereqList(rightPrereqs);
+	assignToMapPointer(state, ptr, left, right);
 }
 
 function transformSpreadAssignment(state: TransformState, ptr: MapPointer, property: ts.SpreadAssignment) {
 	disableMapInline(state, ptr);
-	const spreadExp = transformExpression(state, property.expression);
-	const keyId = lua.tempId();
-	const valueId = lua.tempId();
-	state.prereq(
-		lua.create(lua.SyntaxKind.ForStatement, {
-			ids: lua.list.make(keyId, valueId),
-			expression: lua.create(lua.SyntaxKind.CallExpression, {
-				expression: lua.globals.pairs,
-				args: lua.list.make(spreadExp),
-			}),
-			statements: lua.list.make(
-				lua.create(lua.SyntaxKind.Assignment, {
-					left: lua.create(lua.SyntaxKind.ComputedIndexExpression, {
-						expression: ptr.value,
-						index: keyId,
-					}),
-					right: valueId,
-				}),
-			),
+	let spreadExp = transformExpression(state, property.expression);
+
+	const possiblyUndefined = canBeUndefined(state, state.getType(property.expression));
+	if (possiblyUndefined) {
+		spreadExp = state.pushToVarIfComplex(spreadExp);
+	}
+
+	const keyId = luau.tempId();
+	const valueId = luau.tempId();
+	let statement: luau.Statement = luau.create(luau.SyntaxKind.ForStatement, {
+		ids: luau.list.make(keyId, valueId),
+		expression: luau.create(luau.SyntaxKind.CallExpression, {
+			expression: luau.globals.pairs,
+			args: luau.list.make(spreadExp),
 		}),
-	);
+		statements: luau.list.make(
+			luau.create(luau.SyntaxKind.Assignment, {
+				left: luau.create(luau.SyntaxKind.ComputedIndexExpression, {
+					expression: ptr.value,
+					index: keyId,
+				}),
+				operator: "=",
+				right: valueId,
+			}),
+		),
+	});
+
+	if (possiblyUndefined) {
+		statement = luau.create(luau.SyntaxKind.IfStatement, {
+			condition: spreadExp,
+			statements: luau.list.make(statement),
+			elseBody: luau.list.make(),
+		});
+	}
+
+	state.prereq(statement);
 }
 
 export function transformObjectLiteralExpression(state: TransformState, node: ts.ObjectLiteralExpression) {
-	// starts as lua.Map, becomes lua.TemporaryIdentifier when `disableInline` is called
-	const ptr: MapPointer = { value: lua.map() };
+	// starts as luau.Map, becomes luau.TemporaryIdentifier when `disableInline` is called
+	const ptr: MapPointer = { value: luau.map() };
 	for (const property of node.properties) {
 		if (ts.isPropertyAssignment(property)) {
 			if (ts.isPrivateIdentifier(property.name)) {

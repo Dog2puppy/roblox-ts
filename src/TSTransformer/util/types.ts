@@ -1,5 +1,21 @@
 import ts from "byots";
+import * as tsst from "ts-simple-type";
 import { SYMBOL_NAMES, TransformState } from "TSTransformer";
+
+export function walkTypes(type: ts.Type, callback: (type: ts.Type) => void) {
+	if (type.isUnion() || type.isIntersection()) {
+		for (const t of type.types) {
+			walkTypes(t, callback);
+		}
+	} else {
+		const constraint = type.getConstraint();
+		if (constraint) {
+			walkTypes(constraint, callback);
+		} else {
+			callback(type);
+		}
+	}
+}
 
 function typeConstraint(type: ts.Type, callback: (type: ts.Type) => boolean): boolean {
 	if (type.isUnion()) {
@@ -11,7 +27,7 @@ function typeConstraint(type: ts.Type, callback: (type: ts.Type) => boolean): bo
 	}
 }
 
-function isSomeType(type: ts.Type, cb: (type: ts.Type) => boolean) {
+export function isSomeType(type: ts.Type, cb: (type: ts.Type) => boolean) {
 	if (typeConstraint(type, cb)) {
 		return true;
 	} else {
@@ -110,4 +126,59 @@ export function isObjectType(type: ts.Type) {
 
 export function getTypeArguments(state: TransformState, type: ts.Type) {
 	return state.typeChecker.getTypeArguments(type as ts.TypeReference) ?? [];
+}
+
+const isAssignableToUndefined = (simpleType: tsst.SimpleType) =>
+	tsst.isAssignableToSimpleTypeKind(simpleType, tsst.SimpleTypeKind.UNDEFINED) ||
+	tsst.isAssignableToSimpleTypeKind(simpleType, tsst.SimpleTypeKind.VOID);
+const isAssignableToFalse = (simpleType: tsst.SimpleType) => tsst.isAssignableToValue(simpleType, false);
+
+/**
+ * Uses ts-simple-type to check if a type is assignable to `undefined`
+ */
+export function canBeUndefined(state: TransformState, type: ts.Type) {
+	const simpleType = state.getSimpleType(type);
+	return isAssignableToUndefined(simpleType);
+}
+
+/**
+ * Uses ts-simple-type to check if a type is assignable to `false` or `undefined`
+ */
+export function canTypeBeLuaFalsy(state: TransformState, type: ts.Type) {
+	const simpleType = state.getSimpleType(type);
+	return isAssignableToFalse(simpleType) || isAssignableToUndefined(simpleType);
+}
+
+export function getFirstConstructSymbol(state: TransformState, expression: ts.Expression) {
+	const type = state.getType(expression);
+	if (type.symbol) {
+		const declarations = type.symbol.getDeclarations();
+		if (declarations) {
+			for (const declaration of declarations) {
+				if (ts.isInterfaceDeclaration(declaration)) {
+					for (const member of declaration.members) {
+						if (ts.isConstructSignatureDeclaration(member)) {
+							return member.symbol;
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
+export function getFirstDefinedSymbol(state: TransformState, type: ts.Type) {
+	if (type.isUnion() || type.isIntersection()) {
+		for (const t of type.types) {
+			if (t.symbol && !state.typeChecker.isUndefinedSymbol(t.symbol)) {
+				return t.symbol;
+			}
+		}
+	} else {
+		return type.symbol;
+	}
+}
+
+export function isStringSimpleType(type: tsst.SimpleType) {
+	return type.kind === tsst.SimpleTypeKind.STRING || type.kind === tsst.SimpleTypeKind.STRING_LITERAL;
 }

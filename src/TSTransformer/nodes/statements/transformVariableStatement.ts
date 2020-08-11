@@ -1,5 +1,5 @@
 import ts from "byots";
-import * as lua from "LuaAST";
+import luau from "LuauAST";
 import { diagnostics } from "Shared/diagnostics";
 import { assert } from "Shared/util/assert";
 import { getOrSetDefault } from "Shared/util/getOrSetDefault";
@@ -33,7 +33,7 @@ function checkVariableHoist(state: TransformState, node: ts.Identifier, symbol: 
 		ts.FindAllReferences.Core.eachSymbolReferenceInFile(
 			node,
 			state.typeChecker,
-			state.sourceFile,
+			node.getSourceFile(),
 			token => {
 				if (!isAncestorOf(caseClause, token)) {
 					return true;
@@ -48,20 +48,23 @@ function checkVariableHoist(state: TransformState, node: ts.Identifier, symbol: 
 	}
 }
 
-export function transformVariable(state: TransformState, identifier: ts.Identifier, right?: lua.Expression) {
+export function transformVariable(state: TransformState, identifier: ts.Identifier, right?: luau.Expression) {
 	return state.capture(() => {
 		const symbol = state.typeChecker.getSymbolAtLocation(identifier);
 		assert(symbol);
 
-		const sourceFileSymbol = state.typeChecker.getSymbolAtLocation(state.sourceFile);
-		assert(sourceFileSymbol);
-
 		// export let
 		if (isDefinedAsLet(state, symbol)) {
-			const exportAccess = state.getModuleIdPropertyAccess(symbol, identifier);
+			const exportAccess = state.getModuleIdPropertyAccess(symbol);
 			if (exportAccess) {
 				if (right) {
-					state.prereq(lua.create(lua.SyntaxKind.Assignment, { left: exportAccess, right }));
+					state.prereq(
+						luau.create(luau.SyntaxKind.Assignment, {
+							left: exportAccess,
+							operator: "=",
+							right,
+						}),
+					);
 				}
 				return exportAccess;
 			}
@@ -72,10 +75,10 @@ export function transformVariable(state: TransformState, identifier: ts.Identifi
 		if (state.isHoisted.get(symbol) === true) {
 			// no need to do `x = nil` if the variable is already created
 			if (right) {
-				state.prereq(lua.create(lua.SyntaxKind.Assignment, { left, right }));
+				state.prereq(luau.create(luau.SyntaxKind.Assignment, { left, operator: "=", right }));
 			}
 		} else {
-			state.prereq(lua.create(lua.SyntaxKind.VariableDeclaration, { left, right }));
+			state.prereq(luau.create(luau.SyntaxKind.VariableDeclaration, { left, right }));
 		}
 
 		return left;
@@ -85,14 +88,14 @@ export function transformVariable(state: TransformState, identifier: ts.Identifi
 function transformLuaTupleDestructure(
 	state: TransformState,
 	bindingPattern: ts.ArrayBindingPattern,
-	value: lua.Expression,
+	value: luau.Expression,
 ) {
 	return state.capturePrereqs(() => {
-		const ids = lua.list.make<lua.AnyIdentifier>();
+		const ids = luau.list.make<luau.AnyIdentifier>();
 		const statements = state.capturePrereqs(() => {
 			for (const element of bindingPattern.elements) {
 				if (ts.isOmittedExpression(element)) {
-					lua.list.push(ids, lua.emptyId());
+					luau.list.push(ids, luau.emptyId());
 				} else {
 					if (element.dotDotDotToken) {
 						state.addDiagnostic(diagnostics.noSpreadDestructuring(element));
@@ -100,13 +103,13 @@ function transformLuaTupleDestructure(
 					}
 					if (ts.isIdentifier(element.name)) {
 						const id = transformIdentifierDefined(state, element.name);
-						lua.list.push(ids, id);
+						luau.list.push(ids, id);
 						if (element.initializer) {
 							state.prereq(transformInitializer(state, id, element.initializer));
 						}
 					} else {
-						const id = lua.tempId();
-						lua.list.push(ids, id);
+						const id = luau.tempId();
+						luau.list.push(ids, id);
 						if (element.initializer) {
 							state.prereq(transformInitializer(state, id, element.initializer));
 						}
@@ -119,7 +122,7 @@ function transformLuaTupleDestructure(
 				}
 			}
 		});
-		state.prereq(lua.create(lua.SyntaxKind.VariableDeclaration, { left: ids, right: value }));
+		state.prereq(luau.create(luau.SyntaxKind.VariableDeclaration, { left: ids, right: value }));
 		state.prereqList(statements);
 	});
 }
@@ -127,18 +130,18 @@ function transformLuaTupleDestructure(
 export function transformVariableDeclaration(
 	state: TransformState,
 	node: ts.VariableDeclaration,
-): lua.List<lua.Statement> {
+): luau.List<luau.Statement> {
 	// must transform right _before_ checking isHoisted, that way references inside of value can be hoisted
 	const value = node.initializer ? transformExpression(state, node.initializer) : undefined;
 
 	if (ts.isIdentifier(node.name)) {
-		return transformVariable(state, node.name, value).statements;
+		return transformVariable(state, node.name, value)[1];
 	} else {
 		// in destructuring, rhs must be executed first
 		assert(node.initializer && value);
 		const name = node.name;
 		if (ts.isArrayBindingPattern(name)) {
-			if (lua.isCall(value) && isLuaTupleType(state, state.getType(node.initializer))) {
+			if (luau.isCall(value) && isLuaTupleType(state, state.getType(node.initializer))) {
 				return transformLuaTupleDestructure(state, name, value);
 			}
 			const id = state.pushToVar(value);
@@ -154,14 +157,17 @@ function isVarDeclaration(node: ts.VariableDeclarationList) {
 	return !(node.flags & ts.NodeFlags.Const) && !(node.flags & ts.NodeFlags.Let);
 }
 
-export function transformVariableStatement(state: TransformState, node: ts.VariableStatement): lua.List<lua.Statement> {
+export function transformVariableStatement(
+	state: TransformState,
+	node: ts.VariableStatement,
+): luau.List<luau.Statement> {
 	if (isVarDeclaration(node.declarationList)) {
 		state.addDiagnostic(diagnostics.noVar(node.declarationList));
 	}
 
-	const statements = lua.list.make<lua.Statement>();
+	const statements = luau.list.make<luau.Statement>();
 	for (const declaration of node.declarationList.declarations) {
-		lua.list.pushList(statements, transformVariableDeclaration(state, declaration));
+		luau.list.pushList(statements, transformVariableDeclaration(state, declaration));
 	}
 	return statements;
 }

@@ -1,5 +1,5 @@
 import ts from "byots";
-import * as lua from "LuaAST";
+import luau from "LuauAST";
 import { assert } from "Shared/util/assert";
 import { TransformState } from "TSTransformer";
 import { transformIdentifierDefined } from "TSTransformer/nodes/expressions/transformIdentifier";
@@ -8,21 +8,55 @@ import { transformStatementList } from "TSTransformer/nodes/transformStatementLi
 
 export function transformFunctionDeclaration(state: TransformState, node: ts.FunctionDeclaration) {
 	if (!node.body) {
-		return lua.list.make<lua.Statement>();
+		return luau.list.make<luau.Statement>();
 	}
 
-	assert(node.name);
-	const symbol = state.typeChecker.getSymbolAtLocation(node.name);
-	assert(symbol);
+	const isExportDefault = !!(node.modifierFlagsCache & ts.ModifierFlags.ExportDefault);
 
-	const localize = state.isHoisted.get(symbol) !== true;
-	const name = transformIdentifierDefined(state, node.name);
+	assert(node.name || isExportDefault);
+
+	let localize = isExportDefault;
+	if (node.name) {
+		const symbol = state.typeChecker.getSymbolAtLocation(node.name);
+		assert(symbol);
+		localize = state.isHoisted.get(symbol) !== true;
+	}
+
+	const name = node.name ? transformIdentifierDefined(state, node.name) : luau.id("default");
 
 	const { statements, parameters, hasDotDotDot } = transformParameters(state, node);
+	luau.list.pushList(statements, transformStatementList(state, node.body.statements));
 
-	lua.list.pushList(statements, transformStatementList(state, node.body.statements));
-
-	return lua.list.make(
-		lua.create(lua.SyntaxKind.FunctionDeclaration, { localize, name, statements, parameters, hasDotDotDot }),
-	);
+	if (!!(node.modifierFlagsCache & ts.ModifierFlags.Async)) {
+		const right = luau.create(luau.SyntaxKind.CallExpression, {
+			expression: state.TS("async"),
+			args: luau.list.make(
+				luau.create(luau.SyntaxKind.FunctionExpression, {
+					hasDotDotDot,
+					parameters,
+					statements,
+				}),
+			),
+		});
+		if (localize) {
+			return luau.list.make(
+				luau.create(luau.SyntaxKind.VariableDeclaration, {
+					left: name,
+					right,
+				}),
+			);
+		} else {
+			return luau.list.make(
+				luau.create(luau.SyntaxKind.Assignment, {
+					left: name,
+					operator: "=",
+					right,
+				}),
+			);
+		}
+	} else {
+		return luau.list.make(
+			luau.create(luau.SyntaxKind.FunctionDeclaration, { localize, name, statements, parameters, hasDotDotDot }),
+		);
+	}
 }

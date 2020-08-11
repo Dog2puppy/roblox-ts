@@ -1,22 +1,19 @@
 import ts from "byots";
-import chalk from "chalk";
+import kleur from "kleur";
 
 export type DiagnosticFactory = {
 	(node: ts.Node): ts.DiagnosticWithLocation;
 	id: number;
 };
 
-// force colors
-chalk.level = chalk.Level.Basic;
-
 const REPO_URL = "https://github.com/roblox-ts/roblox-ts";
 
 function suggestion(text: string) {
-	return "Suggestion: " + chalk.yellowBright(text);
+	return "Suggestion: " + kleur.yellow(text);
 }
 
 function issue(id: number) {
-	return "More information: " + chalk.grey(`${REPO_URL}/issues/${id}`);
+	return "More information: " + kleur.grey(`${REPO_URL}/issues/${id}`);
 }
 
 export function createDiagnosticWithLocation(id: number, message: string, node: ts.Node): ts.DiagnosticWithLocation {
@@ -28,7 +25,7 @@ export function createDiagnosticWithLocation(id: number, message: string, node: 
 		start: node.getStart(),
 		length: node.getWidth(),
 		diagnosticType: 0,
-		id: id,
+		id,
 	} as ts.DiagnosticWithLocation;
 }
 
@@ -38,7 +35,10 @@ let id = 0;
  * @param messages The list of messages to include in the error report.
  */
 function diagnostic(...messages: Array<string>): DiagnosticFactory {
-	const result = (node: ts.Node) => createDiagnosticWithLocation(result.id, messages.join("\n"), node);
+	const result = (node: ts.Node) => {
+		debugger;
+		return createDiagnosticWithLocation(result.id, messages.join("\n"), node);
+	};
 	result.id = id++;
 	return result;
 }
@@ -53,7 +53,6 @@ export function getDiagnosticId(diagnostic: ts.Diagnostic): number {
  */
 export const diagnostics = {
 	// banned statements
-	noTryStatement: diagnostic("try-catch statements are not supported!", issue(873)),
 	noForInStatement: diagnostic(
 		"for-in loop statements are not supported!",
 		suggestion("Use for-of with `Object.keys()` instead."),
@@ -62,14 +61,17 @@ export const diagnostics = {
 	noDebuggerStatement: diagnostic("`debugger` is not supported!"),
 
 	// banned expressions
-	noDeleteExpression: diagnostic("`delete` operator is not supported!"),
+	noDeleteExpression: diagnostic(
+		"The `delete` operator is not supported!",
+		suggestion("Set the property to `undefined` instead."),
+		issue(547),
+	),
 	noNullLiteral: diagnostic("`null` is not supported!", suggestion("Use `undefined` instead.")),
 	noPrivateIdentifier: diagnostic("Private identifiers are not supported!"),
 	noTypeOfExpression: diagnostic(
 		"`typeof` operator is not supported!",
 		suggestion("Use `typeIs(value, type)` or `typeOf(value)` instead."),
 	),
-	noVoidExpression: diagnostic("`void` operator is not supported!"),
 	noRegex: diagnostic("Regular expressions are not supported!"),
 
 	// banned features
@@ -93,6 +95,7 @@ export const diagnostics = {
 	noArguments: diagnostic("`arguments` is not supported!"),
 	noPrototype: diagnostic("`prototype` is not supported!"),
 	noSuperProperty: diagnostic("super properties are not supported!"),
+	noNonNumberStringRelationOperator: diagnostic("Relation operators can only be used on number or string types!"),
 
 	// macro methods
 	noOptionalMacroCall: diagnostic("Macro methods can not be optionally called!"),
@@ -107,8 +110,15 @@ export const diagnostics = {
 		"Cannot index a macro without calling it!",
 		suggestion("Use the form `() => a.b()` instead of `a.b`."),
 	),
+	noConstructorMacroWithoutNew: diagnostic("Cannot index a constructor macro without using the `new` operator!"),
+	noMacroExtends: diagnostic("Cannot extend from a macro class!"),
 
 	// import/export
+	missingImportOrExport: diagnostic(
+		"File does not have an import or export statement!",
+		suggestion("Add `export {};` as the first line."),
+		issue(1043),
+	),
 	noModuleSpecifierFile: diagnostic("Could not find file for import. Did you forget to `npm install`?"),
 	noRojoData: diagnostic("Could not find Rojo data"),
 	noNonModuleImport: diagnostic("Cannot import a non-ModuleScript!"),

@@ -1,5 +1,5 @@
 import ts from "byots";
-import * as lua from "LuaAST";
+import luau from "LuauAST";
 import { TransformState } from "TSTransformer";
 import { transformExpression } from "TSTransformer/nodes/expressions/transformExpression";
 import { transformStatementList } from "TSTransformer/nodes/transformStatementList";
@@ -8,50 +8,39 @@ import { createHoistDeclaration } from "TSTransformer/util/createHoistDeclaratio
 function transformCaseClauseExpression(
 	state: TransformState,
 	caseClauseExpression: ts.Expression,
-	switchExpression: lua.Expression,
-	fallThroughFlagId: lua.TemporaryIdentifier,
+	switchExpression: luau.Expression,
+	fallThroughFlagId: luau.TemporaryIdentifier,
 	canFallThroughTo: boolean,
 ) {
-	const capturePrereqsResult = state.capture(() => transformExpression(state, caseClauseExpression));
-	let { statements: prereqStatements } = capturePrereqsResult;
-	const { expression } = capturePrereqsResult;
+	// eslint-disable-next-line prefer-const
+	let [expression, prereqStatements] = state.capture(() => transformExpression(state, caseClauseExpression));
 
-	let condition: lua.Expression = lua.create(lua.SyntaxKind.BinaryExpression, {
-		left: switchExpression,
-		right: expression,
-		operator: "==",
-	});
+	let condition: luau.Expression = luau.binary(switchExpression, "==", expression);
 
 	if (canFallThroughTo) {
 		if (prereqStatements.head) {
-			const noFallThroughCondition = lua.create(lua.SyntaxKind.UnaryExpression, {
-				expression: fallThroughFlagId,
-				operator: "not",
-			});
+			const noFallThroughCondition = luau.unary("not", fallThroughFlagId);
 
-			lua.list.push(
+			luau.list.push(
 				prereqStatements,
-				lua.create(lua.SyntaxKind.Assignment, {
+				luau.create(luau.SyntaxKind.Assignment, {
 					left: fallThroughFlagId,
+					operator: "=",
 					right: expression,
 				}),
 			);
 
-			prereqStatements = lua.list.make<lua.Statement>(
-				lua.create(lua.SyntaxKind.IfStatement, {
+			prereqStatements = luau.list.make<luau.Statement>(
+				luau.create(luau.SyntaxKind.IfStatement, {
 					condition: noFallThroughCondition,
 					statements: prereqStatements,
-					elseBody: lua.list.make<lua.Statement>(),
+					elseBody: luau.list.make<luau.Statement>(),
 				}),
 			);
 
 			condition = fallThroughFlagId;
 		} else {
-			condition = lua.create(lua.SyntaxKind.BinaryExpression, {
-				left: fallThroughFlagId,
-				right: condition,
-				operator: "or",
-			});
+			condition = luau.binary(fallThroughFlagId, "or", condition);
 		}
 	}
 
@@ -64,8 +53,8 @@ function transformCaseClauseExpression(
 function transformCaseClause(
 	state: TransformState,
 	node: ts.CaseClause,
-	switchExpression: lua.Expression,
-	fallThroughFlagId: lua.TemporaryIdentifier,
+	switchExpression: luau.Expression,
+	fallThroughFlagId: luau.TemporaryIdentifier,
 	canFallThroughTo: boolean,
 	shouldUpdateFallThroughFlag: boolean,
 ) {
@@ -77,36 +66,38 @@ function transformCaseClause(
 		canFallThroughTo,
 	);
 
-	const firstStatement = node.statements[0];
+	const nonEmptyStatements = node.statements.filter(v => !ts.isEmptyStatement(v));
+	const firstStatement = nonEmptyStatements[0];
 	const statements = transformStatementList(
 		state,
-		node.statements.length === 1 && ts.isBlock(firstStatement) ? firstStatement.statements : node.statements,
+		nonEmptyStatements.length === 1 && ts.isBlock(firstStatement) ? firstStatement.statements : node.statements,
 	);
 
-	const canFallThroughFrom = statements.tail !== undefined && !lua.isFinalStatement(statements.tail.value);
+	const canFallThroughFrom = statements.tail === undefined || !luau.isFinalStatement(statements.tail.value);
 	if (canFallThroughFrom && shouldUpdateFallThroughFlag) {
-		lua.list.push(
+		luau.list.push(
 			statements,
-			lua.create(lua.SyntaxKind.Assignment, {
+			luau.create(luau.SyntaxKind.Assignment, {
 				left: fallThroughFlagId,
-				right: lua.bool(true),
+				operator: "=",
+				right: luau.bool(true),
 			}),
 		);
 	}
 
-	const clauseStatements = lua.list.make<lua.Statement>();
+	const clauseStatements = luau.list.make<luau.Statement>();
 
 	const hoistDeclaration = createHoistDeclaration(state, node);
 	if (hoistDeclaration) {
-		lua.list.push(clauseStatements, hoistDeclaration);
+		luau.list.push(clauseStatements, hoistDeclaration);
 	}
 
-	lua.list.push(
+	luau.list.push(
 		clauseStatements,
-		lua.create(lua.SyntaxKind.IfStatement, {
+		luau.create(luau.SyntaxKind.IfStatement, {
 			condition,
 			statements,
-			elseBody: lua.list.make(),
+			elseBody: luau.list.make(),
 		}),
 	);
 
@@ -119,11 +110,11 @@ function transformCaseClause(
 
 export function transformSwitchStatement(state: TransformState, node: ts.SwitchStatement) {
 	const expression = state.pushToVarIfComplex(transformExpression(state, node.expression));
-	const fallThroughFlagId = lua.tempId();
+	const fallThroughFlagId = luau.tempId();
 
 	let isFallThroughFlagNeeded = false;
 
-	const statements = lua.list.make<lua.Statement>();
+	const statements = luau.list.make<luau.Statement>();
 	let canFallThroughTo = false;
 	for (let i = 0; i < node.caseBlock.clauses.length; i++) {
 		const caseClauseNode = node.caseBlock.clauses[i];
@@ -140,8 +131,8 @@ export function transformSwitchStatement(state: TransformState, node: ts.SwitchS
 				shouldUpdateFallThroughFlag,
 			);
 
-			lua.list.pushList(statements, prereqs);
-			lua.list.pushList(statements, clauseStatements);
+			luau.list.pushList(statements, prereqs);
+			luau.list.pushList(statements, clauseStatements);
 
 			canFallThroughTo = canFallThroughFrom;
 
@@ -149,24 +140,24 @@ export function transformSwitchStatement(state: TransformState, node: ts.SwitchS
 				isFallThroughFlagNeeded = true;
 			}
 		} else {
-			lua.list.pushList(statements, transformStatementList(state, caseClauseNode.statements));
+			luau.list.pushList(statements, transformStatementList(state, caseClauseNode.statements));
 			break;
 		}
 	}
 
 	if (isFallThroughFlagNeeded) {
-		lua.list.unshift(
+		luau.list.unshift(
 			statements,
-			lua.create(lua.SyntaxKind.VariableDeclaration, {
+			luau.create(luau.SyntaxKind.VariableDeclaration, {
 				left: fallThroughFlagId,
-				right: lua.bool(false),
+				right: luau.bool(false),
 			}),
 		);
 	}
 
-	return lua.list.make<lua.Statement>(
-		lua.create(lua.SyntaxKind.RepeatStatement, {
-			condition: lua.bool(true),
+	return luau.list.make<luau.Statement>(
+		luau.create(luau.SyntaxKind.RepeatStatement, {
+			condition: luau.bool(true),
 			statements,
 		}),
 	);

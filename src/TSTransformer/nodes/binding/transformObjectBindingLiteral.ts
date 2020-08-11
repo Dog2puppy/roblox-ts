@@ -1,5 +1,5 @@
 import ts from "byots";
-import * as lua from "LuaAST";
+import luau from "LuauAST";
 import { diagnostics } from "Shared/diagnostics";
 import { assert } from "Shared/util/assert";
 import { TransformState } from "TSTransformer";
@@ -13,16 +13,22 @@ import { skipDownwards } from "TSTransformer/util/traversal";
 export function transformObjectBindingLiteral(
 	state: TransformState,
 	bindingLiteral: ts.ObjectLiteralExpression,
-	parentId: lua.AnyIdentifier,
+	parentId: luau.AnyIdentifier,
 	accessType: ts.Type | ReadonlyArray<ts.Type>,
 ) {
 	for (const property of bindingLiteral.properties) {
 		if (ts.isShorthandPropertyAssignment(property)) {
 			const name = property.name;
-			const value = objectAccessor(state, parentId, name, name, name);
+			const value = objectAccessor(state, parentId, accessType, name);
 			const id = transformWritableExpression(state, name, property.objectAssignmentInitializer !== undefined);
-			state.prereq(lua.create(lua.SyntaxKind.Assignment, { left: id, right: value }));
-			assert(lua.isAnyIdentifier(id));
+			state.prereq(
+				luau.create(luau.SyntaxKind.Assignment, {
+					left: id,
+					operator: "=",
+					right: value,
+				}),
+			);
+			assert(luau.isAnyIdentifier(id));
 			if (property.objectAssignmentInitializer) {
 				state.prereq(transformInitializer(state, id, property.objectAssignmentInitializer));
 			}
@@ -31,17 +37,23 @@ export function transformObjectBindingLiteral(
 			return;
 		} else if (ts.isPropertyAssignment(property)) {
 			const name = property.name;
-			let init: ts.Expression | ts.ObjectLiteralElementLike = property.initializer;
+			let init = property.initializer;
 			let initializer: ts.Expression | undefined;
 			if (ts.isBinaryExpression(property.initializer)) {
 				initializer = skipDownwards(property.initializer.right);
 				init = skipDownwards(property.initializer.left);
 			}
 
-			const value = objectAccessor(state, parentId, name, name, name);
+			const value = objectAccessor(state, parentId, accessType, name);
 			if (ts.isIdentifier(init) || ts.isElementAccessExpression(init) || ts.isPropertyAccessExpression(init)) {
 				const id = transformWritableExpression(state, init, initializer !== undefined);
-				state.prereq(lua.create(lua.SyntaxKind.Assignment, { left: id, right: value }));
+				state.prereq(
+					luau.create(luau.SyntaxKind.Assignment, {
+						left: id,
+						operator: "=",
+						right: value,
+					}),
+				);
 				if (initializer) {
 					state.prereq(transformInitializer(state, id, initializer));
 				}

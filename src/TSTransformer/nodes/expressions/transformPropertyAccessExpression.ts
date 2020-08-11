@@ -1,28 +1,32 @@
 import ts from "byots";
-import * as lua from "LuaAST";
+import luau from "LuauAST";
 import { diagnostics } from "Shared/diagnostics";
 import { TransformState } from "TSTransformer";
 import { transformOptionalChain } from "TSTransformer/nodes/transformOptionalChain";
 import { convertToIndexableExpression } from "TSTransformer/util/convertToIndexableExpression";
 import { isMethod } from "TSTransformer/util/isMethod";
+import { getFirstDefinedSymbol } from "TSTransformer/util/types";
 import { validateNotAnyType } from "TSTransformer/util/validateNotAny";
 
 export function transformPropertyAccessExpressionInner(
 	state: TransformState,
 	node: ts.PropertyAccessExpression,
-	expression: lua.Expression,
+	expression: luau.Expression,
 	name: string,
 ) {
 	validateNotAnyType(state, node.expression);
 
-	if (state.macroManager.getPropertyCallMacro(state.getType(node).symbol)) {
-		state.addDiagnostic(diagnostics.noMacroWithoutCall(node));
-		return lua.emptyId();
+	const symbol = getFirstDefinedSymbol(state, state.getType(node));
+	if (symbol) {
+		if (state.macroManager.getPropertyCallMacro(symbol)) {
+			state.addDiagnostic(diagnostics.noMacroWithoutCall(node));
+			return luau.emptyId();
+		}
 	}
 
 	if (isMethod(state, node)) {
 		state.addDiagnostic(diagnostics.noIndexWithoutCall(node));
-		return lua.emptyId();
+		return luau.emptyId();
 	}
 
 	if (ts.isPrototypeAccess(node)) {
@@ -31,10 +35,10 @@ export function transformPropertyAccessExpressionInner(
 
 	const constantValue = state.typeChecker.getConstantValue(node);
 	if (constantValue !== undefined) {
-		return typeof constantValue === "string" ? lua.string(constantValue) : lua.number(constantValue);
+		return typeof constantValue === "string" ? luau.string(constantValue) : luau.number(constantValue);
 	}
 
-	return lua.create(lua.SyntaxKind.PropertyAccessExpression, {
+	return luau.create(luau.SyntaxKind.PropertyAccessExpression, {
 		expression: convertToIndexableExpression(expression),
 		name,
 	});

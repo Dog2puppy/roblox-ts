@@ -1,47 +1,68 @@
-# Contributing Guide
-Thanks for your interest in contributing to **roblox-ts**!
+# Contributing
 
-## Questions
-Have a question? [Please ask it on our Discord!](https://discord.gg/f6Rn6RY)
+Thank you for your interest in contributing to **roblox-ts**!
 
-## Issues
-If you think you found a bug or have a feature request, please make a new issue in the [issues section](https://github.com/roblox-ts/roblox-ts).\
-Please include:
-- a code sample to reproduce the issue or specific steps to follow
-- what you expected to happen
-- what actually happened
+## Getting Started
 
-## Development
-If you're interested in contributing to the compiler's source code, please continue reading.
+First, we'll need to setup the development build of **roblox-ts**.
 
-### Structure
-The compiler is split into three primary files currently.
-- `src/index.ts` - controls the CLI part of the compiler and creates new `Project` objects.
-- `src/class/Project.ts` - a class that represents the entire project structure. Handles module resoltuion, emitting files, copying include files, and copying module files. Creates a `Compiler` for each file.
-- `src/compiler/*.ts` - a folder consisting mostly of functions which take TypeScript AST Node objects, and return strings of emitted Lua source code.
-- `src/CompilerState.ts` - a class which holds the global state for a single file's compilation.
+This guide assumes you have the following installed:
 
-Most of the code for the project exists inside of the `src/compiler` folder. The dependancy [`ts-morph`](https://github.com/dsherret/ts-morph) provides the TypeScript node classes. [You can find some documentation on those classes here.](https://dsherret.github.io/ts-morph/) The nodes are converted to strings of Lua source code that is functionally identical to their TypeScript equivalents.
+-   Git
+-   NodeJS
+-   NPM
 
-### Local Testing
-Usually, it's inconvenient to continuously sync code to Roblox Studio when working on the compiler.
+We'll also assume you understand some basic terminal navigation commands (`cd`, `ls`/`dir`, etc.).
 
-For faster development and testing, it's recommended to use roblox-ts with [LPGHatGuy's lemur](https://github.com/LPGhatguy/lemur).
+1. Begin by creating a fork of roblox-ts.
 
-[You can find a guide for that here.](https://github.com/roblox-ts/roblox-ts/wiki/Usage-with-Lemur)
+![https://i.imgur.com/wRtbuiy.png](https://i.imgur.com/wRtbuiy.png)
 
-### Code Quality and Formatting
-To ensure code quality, we use **[eslint](https://eslint.org/)** and **[Prettier](https://prettier.io/)**. These rules are enforced by our GitHub Acions CI build step.\
-If you prefer to not install these globally or use extensions, you can simply run:\
-`npm run eslint` to check linting and\
-`npm run prettier` to clean up code formatting
+2. Navigate to somewhere you'd like to keep your development copy of **roblox-ts** and then you can run the following commands:
 
-### Unit Tests
-The unit tests are written in TypeScript, compiled into Lua and then run in GitHub Acions CI using Lemur + TestEZ.\
-The tests are located in the `tests/src` folder.\
-All tests must be in the form of `export = () => { /* test code */ }`\
+```sh
+# Clone your fork of roblox-ts (you may prefer to use SSH instead)
+git clone https://github.com/YOUR_GITHUB_USERNAME/roblox-ts.git
+# Navigate into the roblox-ts folder
+cd roblox-ts
+# Checkout the refactor branch
+git checkout refactor
+# Install dependency packages (node_modules)
+npm install
+# build the compiler
+npm run build
+# link
+npm run devlink
+```
 
+3. You should now be able to use the command `rbxtsc-dev` to run the development compiler!
 
-To run the tests locally, you'll need Lua 5.1, luarocks, luafilesystem, and dkjson installed.\
-Then simply run, `npm test` to compile and run the tests.
+4. At a later time, if you need to update it:
 
+```sh
+# pull latest changes
+git pull
+# build the compiler
+npm run build
+```
+
+It is not necessary to run the "devlink" script again.
+
+## Unit Testing
+
+**roblox-ts** keeps a suite of automated unit tests inside of `/tests`.
+
+Effectively, this folder is a tiny **roblox-ts** game. Testing process is as follows:
+
+1. Compile tests project to create a `/tests/out` folder containing `.lua` files
+2. Use `rojo build` to create `/tests/test.rbxlx`
+3. Use `run-in-roblox` to open studio and execute the tests
+
+You can run this process yourself if you have Roblox Studio and [foreman](https://github.com/Roblox/foreman) installed. (Only works on Windows and MacOS)
+
+```sh
+# install rojo + run-in-roblox
+foreman install
+# Compile tests, build .rbxlx, run with run-in-roblox
+npm test
+```

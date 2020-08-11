@@ -1,57 +1,52 @@
 import ts from "byots";
-import * as lua from "LuaAST";
+import luau from "LuauAST";
 import { TransformState } from "TSTransformer";
 import { transformStatement } from "TSTransformer/nodes/statements/transformStatement";
 import { createHoistDeclaration } from "TSTransformer/util/createHoistDeclaration";
 
 /**
- * Convert a ts.Statement array into a lua.list<...> tree
+ * Convert a ts.Statement array into a luau.list<...> tree
  * @param state The current state of the transformation.
- * @param statements The statements to transform into a `lua.list<...>`.
+ * @param statements The statements to transform into a `luau.list<...>`.
  * @param exportInfo Information about exporting.
  */
 export function transformStatementList(
 	state: TransformState,
 	statements: ReadonlyArray<ts.Statement>,
 	exportInfo?: {
-		id: lua.AnyIdentifier;
+		id: luau.AnyIdentifier;
 		mapping: Map<ts.Statement, Array<string>>;
 	},
 ) {
-	// Make a new lua tree
-	const result = lua.list.make<lua.Statement>();
+	// make a new Luau tree
+	const result = luau.list.make<luau.Statement>();
 
-	// Iterate through each statement in the `statements` array
+	// iterate through each statement in the `statements` array
 	for (const statement of statements) {
-		let transformedStatements!: lua.List<lua.Statement>;
-		// Capture prerequisite statements for the `ts.Statement`
-		// Transform the statement into a lua.List<...>
+		let transformedStatements!: luau.List<luau.Statement>;
+		// capture prerequisite statements for the `ts.Statement`
+		// transform the statement into a luau.List<...>
 		const prereqStatements = state.capturePrereqs(
 			() => (transformedStatements = transformStatement(state, statement)),
 		);
 
-		// Iterate through each of the leading comments of the statement
-		for (const comment of state.getLeadingComments(statement)) {
-			lua.list.push(
-				result,
-				lua.create(lua.SyntaxKind.Comment, {
-					text: comment,
-				}),
-			);
+		// iterate through each of the leading comments of the statement
+		if (state.compilerOptions.removeComments !== true) {
+			luau.list.pushList(result, state.getLeadingComments(statement));
 		}
 
-		// Check statement for hoisting
-		// Hoisting is the use of a variable before it was declared
+		// check statement for hoisting
+		// hoisting is the use of a variable before it was declared
 		const hoistDeclaration = createHoistDeclaration(state, statement);
 		if (hoistDeclaration) {
-			lua.list.push(result, hoistDeclaration);
+			luau.list.push(result, hoistDeclaration);
 		}
 
-		lua.list.pushList(result, prereqStatements);
-		lua.list.pushList(result, transformedStatements);
+		luau.list.pushList(result, prereqStatements);
+		luau.list.pushList(result, transformedStatements);
 
 		const lastStatement = transformedStatements.tail?.value;
-		if (lastStatement && lua.isFinalStatement(lastStatement)) {
+		if (lastStatement && luau.isFinalStatement(lastStatement)) {
 			break;
 		}
 
@@ -61,14 +56,15 @@ export function transformStatementList(
 			const exportMapping = exportInfo.mapping.get(statement);
 			if (exportMapping !== undefined) {
 				for (const exportName of exportMapping) {
-					lua.list.push(
+					luau.list.push(
 						result,
-						lua.create(lua.SyntaxKind.Assignment, {
-							left: lua.create(lua.SyntaxKind.PropertyAccessExpression, {
+						luau.create(luau.SyntaxKind.Assignment, {
+							left: luau.create(luau.SyntaxKind.PropertyAccessExpression, {
 								expression: containerId,
 								name: exportName,
 							}),
-							right: lua.id(exportName),
+							operator: "=",
+							right: luau.id(exportName),
 						}),
 					);
 				}
@@ -76,17 +72,10 @@ export function transformStatementList(
 		}
 	}
 
-	if (statements.length > 0) {
+	if (state.compilerOptions.removeComments !== true && statements.length > 0) {
 		const lastParentToken = statements[statements.length - 1].parent.getLastToken();
 		if (lastParentToken) {
-			for (const comment of state.getLeadingComments(lastParentToken)) {
-				lua.list.push(
-					result,
-					lua.create(lua.SyntaxKind.Comment, {
-						text: comment,
-					}),
-				);
-			}
+			luau.list.pushList(result, state.getLeadingComments(lastParentToken));
 		}
 	}
 

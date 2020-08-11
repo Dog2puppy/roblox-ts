@@ -1,11 +1,11 @@
 import ts from "byots";
-import fs from "fs-extra";
 import { CLIError } from "CLI/errors/CLIError";
-import { Watcher } from "CLI/modules/Watcher";
+import fs from "fs-extra";
 import path from "path";
 import { Project, ProjectOptions } from "Project";
 import { DiagnosticError } from "Shared/errors/DiagnosticError";
 import { ProjectError } from "Shared/errors/ProjectError";
+import { assert } from "Shared/util/assert";
 import yargs from "yargs";
 
 function getTsConfigProjectOptions(tsConfigPath?: string): Partial<ProjectOptions> | undefined {
@@ -20,6 +20,7 @@ function getTsConfigProjectOptions(tsConfigPath?: string): Partial<ProjectOption
 interface CLIOptions {
 	project: string;
 	watch: boolean;
+	verbose: boolean;
 }
 
 /**
@@ -44,7 +45,15 @@ export = ts.identity<yargs.CommandModule<{}, Partial<ProjectOptions> & CLIOption
 				default: false,
 				describe: "enable watch mode",
 			})
+			.option("verbose", {
+				boolean: true,
+				default: false,
+				describe: "enable verbose logs",
+			})
 			// DO NOT PROVIDE DEFAULTS BELOW HERE, USE DEFAULT_PROJECT_OPTIONS
+			.option("type", {
+				choices: ["game", "model", "package"] as const,
+			})
 			.option("includePath", {
 				alias: "i",
 				string: true,
@@ -55,8 +64,8 @@ export = ts.identity<yargs.CommandModule<{}, Partial<ProjectOptions> & CLIOption
 				describe: "Manually select Rojo configuration file",
 			}),
 
-	handler: argv => {
-		// Attempt to retrieve TypeScript configuration JSON path
+	handler: async argv => {
+		// attempt to retrieve TypeScript configuration JSON path
 		let tsConfigPath: string | undefined = path.resolve(argv.project);
 		if (!fs.existsSync(tsConfigPath) || !fs.statSync(tsConfigPath).isFile()) {
 			tsConfigPath = ts.findConfigFile(tsConfigPath, ts.sys.fileExists);
@@ -66,22 +75,24 @@ export = ts.identity<yargs.CommandModule<{}, Partial<ProjectOptions> & CLIOption
 		}
 		tsConfigPath = path.resolve(process.cwd(), tsConfigPath);
 
-		// Parse the contents of the retrieved JSON path as a partial `ProjectOptions`
+		// parse the contents of the retrieved JSON path as a partial `ProjectOptions`
 		const tsConfigProjectOptions = getTsConfigProjectOptions(tsConfigPath);
 		const projectOptions: Partial<ProjectOptions> = Object.assign({}, tsConfigProjectOptions, argv);
 
-		// If watch mode is enabled
+		// if watch mode is enabled
 		if (argv.watch) {
-			new Watcher(tsConfigPath, projectOptions);
+			assert(false, "Not implemented");
 		} else {
 			try {
-				// Attempt to build the project
-				const project = new Project(tsConfigPath, projectOptions);
-				project.compile();
+				// attempt to build the project
+				const project = new Project(tsConfigPath, projectOptions, argv.verbose);
+				project.cleanup();
+				project.compileAll();
 			} catch (e) {
-				// Catch recognized errors
+				// catch recognized errors
 				if (e instanceof ProjectError || e instanceof DiagnosticError) {
 					e.log();
+					process.exit(1);
 				} else {
 					throw e;
 				}

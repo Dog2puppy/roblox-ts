@@ -1,120 +1,121 @@
 import ts from "byots";
-import * as lua from "LuaAST";
-import { assert } from "Shared/util/assert";
+import luau from "LuauAST";
+import { Lazy } from "Shared/classes/Lazy";
 import { TransformState } from "TSTransformer";
 import { transformVariable } from "TSTransformer/nodes/statements/transformVariableStatement";
 import { createImportExpression } from "TSTransformer/util/createImportExpression";
+import { getSourceFileFromModuleSpecifier } from "TSTransformer/util/getSourceFileFromModuleSpecifier";
 
-function countImportExpUses(importClause: ts.ImportClause) {
+function countImportExpUses(state: TransformState, importClause: ts.ImportClause) {
 	let uses = 0;
+
 	if (importClause.name) {
-		uses++;
+		if (state.resolver.isReferencedAliasDeclaration(importClause)) {
+			uses++;
+		}
 	}
+
 	if (importClause.namedBindings) {
 		if (ts.isNamespaceImport(importClause.namedBindings)) {
 			uses++;
 		} else {
-			uses += importClause.namedBindings.elements.length;
-		}
-	}
-	return uses;
-}
-
-export function transformImportDeclaration(state: TransformState, node: ts.ImportDeclaration) {
-	assert(ts.isStringLiteral(node.moduleSpecifier));
-
-	// no emit for type only
-	const importClause = node.importClause;
-	if (importClause && importClause.isTypeOnly) return lua.list.make<lua.Statement>();
-
-	const statements = lua.list.make<lua.Statement>();
-
-	let importExp: lua.IndexableExpression = createImportExpression(state, node.getSourceFile(), node.moduleSpecifier);
-
-	if (!importClause) {
-		assert(lua.isCallExpression(importExp));
-		lua.list.push(
-			statements,
-			lua.create(lua.SyntaxKind.CallStatement, {
-				expression: importExp,
-			}),
-		);
-		return statements;
-	}
-
-	const defaultImport = importClause.name;
-	const namedBindings = importClause.namedBindings;
-
-	// detect if we need to push to a new var or not
-	const uses = countImportExpUses(importClause);
-	if (uses > 1) {
-		const importId = lua.tempId();
-		lua.list.push(
-			statements,
-			lua.create(lua.SyntaxKind.VariableDeclaration, {
-				left: importId,
-				right: importExp,
-			}),
-		);
-		importExp = importId;
-	}
-
-	// default import logic
-	if (defaultImport) {
-		const aliasSymbol = state.typeChecker.getSymbolAtLocation(defaultImport);
-		assert(aliasSymbol);
-		if (!!(ts.skipAlias(aliasSymbol, state.typeChecker).flags & ts.SymbolFlags.Value)) {
-			const exportSymbol = state.typeChecker.getImmediateAliasedSymbol(aliasSymbol);
-			assert(exportSymbol);
-			const exportDec = exportSymbol.valueDeclaration;
-			if (exportDec && ts.isExportAssignment(exportDec) && !exportDec.isExportEquals) {
-				lua.list.pushList(
-					statements,
-					transformVariable(
-						state,
-						defaultImport,
-						lua.create(lua.SyntaxKind.PropertyAccessExpression, {
-							expression: importExp,
-							name: "default",
-						}),
-					).statements,
-				);
-			} else {
-				lua.list.pushList(statements, transformVariable(state, defaultImport, importExp).statements);
+			for (const element of importClause.namedBindings.elements) {
+				if (state.resolver.isReferencedAliasDeclaration(element)) {
+					uses++;
+				}
 			}
 		}
 	}
 
-	if (namedBindings) {
-		// namespace import logic
-		if (ts.isNamespaceImport(namedBindings)) {
-			lua.list.pushList(statements, transformVariable(state, namedBindings.name, importExp).statements);
-		} else {
-			// named elements import logic
-			for (const element of namedBindings.elements) {
-				const aliasSymbol = state.typeChecker.getSymbolAtLocation(element.name);
-				assert(aliasSymbol);
-				if (!!(ts.skipAlias(aliasSymbol, state.typeChecker).flags & ts.SymbolFlags.Value)) {
-					lua.list.pushList(
+	return uses;
+}
+
+export function transformImportDeclaration(state: TransformState, node: ts.ImportDeclaration) {
+	// no emit for type only
+	const importClause = node.importClause;
+	if (importClause && importClause.isTypeOnly) return luau.list.make<luau.Statement>();
+
+	const statements = luau.list.make<luau.Statement>();
+
+	const importExp = new Lazy<luau.CallExpression | luau.AnyIdentifier>(() =>
+		createImportExpression(state, node.getSourceFile(), node.moduleSpecifier),
+	);
+
+	if (importClause) {
+		// detect if we need to push to a new var or not
+		const uses = countImportExpUses(state, importClause);
+		if (uses > 1) {
+			const id = luau.tempId();
+			luau.list.push(
+				statements,
+				luau.create(luau.SyntaxKind.VariableDeclaration, {
+					left: id,
+					right: importExp.get(),
+				}),
+			);
+			importExp.set(id);
+		}
+
+		// default import logic
+		if (importClause.name) {
+			if (state.resolver.isReferencedAliasDeclaration(importClause)) {
+				const moduleFile = getSourceFileFromModuleSpecifier(state.typeChecker, node.moduleSpecifier);
+				if (moduleFile && moduleFile.statements.some(v => ts.isExportAssignment(v) && v.isExportEquals)) {
+					luau.list.pushList(statements, transformVariable(state, importClause.name, importExp.get())[1]);
+				} else {
+					luau.list.pushList(
 						statements,
 						transformVariable(
 							state,
-							element.name,
-							lua.create(lua.SyntaxKind.PropertyAccessExpression, {
-								expression: importExp,
-								name: (element.propertyName ?? element.name).text,
+							importClause.name,
+							luau.create(luau.SyntaxKind.PropertyAccessExpression, {
+								expression: importExp.get(),
+								name: "default",
 							}),
-						).statements,
+						)[1],
 					);
+				}
+			}
+		}
+
+		if (importClause.namedBindings) {
+			// namespace import logic
+			if (ts.isNamespaceImport(importClause.namedBindings)) {
+				luau.list.pushList(
+					statements,
+					transformVariable(state, importClause.namedBindings.name, importExp.get())[1],
+				);
+			} else {
+				// named elements import logic
+				for (const element of importClause.namedBindings.elements) {
+					if (state.resolver.isReferencedAliasDeclaration(element)) {
+						luau.list.pushList(
+							statements,
+							transformVariable(
+								state,
+								element.name,
+								luau.create(luau.SyntaxKind.PropertyAccessExpression, {
+									expression: importExp.get(),
+									name: (element.propertyName ?? element.name).text,
+								}),
+							)[1],
+						);
+					}
 				}
 			}
 		}
 	}
 
 	// ensure we emit something
-	if (lua.list.isEmpty(statements)) {
-		assert(lua.isCallExpression(importExp));
-		lua.list.push(statements, lua.create(lua.SyntaxKind.CallStatement, { expression: importExp }));
+	if (
+		!importClause ||
+		(state.compilerOptions.importsNotUsedAsValues === ts.ImportsNotUsedAsValues.Preserve &&
+			luau.list.isEmpty(statements))
+	) {
+		const expression = importExp.get();
+		if (luau.isCallExpression(expression)) {
+			luau.list.push(statements, luau.create(luau.SyntaxKind.CallStatement, { expression }));
+		}
 	}
 
 	return statements;

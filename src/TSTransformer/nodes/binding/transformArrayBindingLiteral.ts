@@ -1,5 +1,5 @@
 import ts from "byots";
-import * as lua from "LuaAST";
+import luau from "LuauAST";
 import { diagnostics } from "Shared/diagnostics";
 import { assert } from "Shared/util/assert";
 import { TransformState } from "TSTransformer";
@@ -13,11 +13,11 @@ import { skipDownwards } from "TSTransformer/util/traversal";
 export function transformArrayBindingLiteral(
 	state: TransformState,
 	bindingLiteral: ts.ArrayLiteralExpression,
-	parentId: lua.AnyIdentifier,
+	parentId: luau.AnyIdentifier,
 	accessType: ts.Type | ReadonlyArray<ts.Type>,
 ) {
 	let index = 0;
-	const idStack = new Array<lua.Identifier>();
+	const idStack = new Array<luau.Identifier>();
 	const accessor = getAccessorForBindingType(state, bindingLiteral, accessType);
 	for (let element of bindingLiteral.elements) {
 		if (ts.isOmittedExpression(element)) {
@@ -39,7 +39,13 @@ export function transformArrayBindingLiteral(
 				ts.isPropertyAccessExpression(element)
 			) {
 				const id = transformWritableExpression(state, element, initializer !== undefined);
-				state.prereq(lua.create(lua.SyntaxKind.Assignment, { left: id, right: value }));
+				state.prereq(
+					luau.create(luau.SyntaxKind.Assignment, {
+						left: id,
+						operator: "=",
+						right: value,
+					}),
+				);
 				if (initializer) {
 					state.prereq(transformInitializer(state, id, initializer));
 				}

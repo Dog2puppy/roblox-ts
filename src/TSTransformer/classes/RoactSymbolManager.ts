@@ -1,11 +1,12 @@
 import ts from "byots";
-import path from "path";
 import { assert } from "Shared/util/assert";
+import { isSomeType } from "TSTransformer/util/types";
 
 export const ROACT_SYMBOL_NAMES = {
 	Component: "Component",
 	PureComponent: "PureComponent",
 	Fragment: "Fragment",
+	Element: "Element",
 };
 
 function getChildByNameOrThrow(children: ReadonlyArray<ts.Node>, childName: string) {
@@ -31,41 +32,36 @@ function getChildByNameOrThrow(children: ReadonlyArray<ts.Node>, childName: stri
 }
 
 export class RoactSymbolManager {
-	private readonly typeChecker: ts.TypeChecker;
-	private readonly roactIndexSourceFile: ts.SourceFile | undefined;
 	private readonly symbols = new Map<string, ts.Symbol>();
 	public readonly jsxIntrinsicNameMap = new Map<ts.Symbol, string>();
 
-	private addSymbolFromNode(name: string, node: ts.Node) {
-		const symbol = this.typeChecker.getSymbolAtLocation(node);
-		assert(symbol);
-		assert(!this.symbols.has(name), `symbols already contains ${name}`);
-		this.symbols.set(name, symbol);
-	}
-
-	constructor(program: ts.Program, typeChecker: ts.TypeChecker, nodeModulesPath: string) {
-		this.typeChecker = typeChecker;
-
-		// only continue if @rbxts/roact exists
-		this.roactIndexSourceFile = program.getSourceFile(path.join(nodeModulesPath, "roact", "index.d.ts"));
-		if (!this.roactIndexSourceFile) return;
-		assert(this.roactIndexSourceFile);
-
-		const roactNamespace = getChildByNameOrThrow(this.roactIndexSourceFile.statements, "Roact");
+	constructor(typeChecker: ts.TypeChecker, roactIndexSourceFile: ts.SourceFile) {
+		const roactNamespace = getChildByNameOrThrow(roactIndexSourceFile.statements, "Roact");
 		assert(ts.isModuleDeclaration(roactNamespace) && roactNamespace.body && ts.isModuleBlock(roactNamespace.body));
+
+		const addSymbolFromNode = (name: string, node: ts.Node) => {
+			const symbol = typeChecker.getSymbolAtLocation(node);
+			assert(symbol);
+			assert(!this.symbols.has(name), `symbols already contains ${name}`);
+			this.symbols.set(name, symbol);
+		};
 
 		// "Component", "PureComponent", "Fragment"
 		const roactSymbolNameSet = new Set(Object.values(ROACT_SYMBOL_NAMES));
 		for (const statement of roactNamespace.body.statements) {
-			if (ts.isClassDeclaration(statement) && statement.name) {
+			if (ts.isInterfaceDeclaration(statement)) {
 				if (roactSymbolNameSet.has(statement.name.text)) {
-					this.addSymbolFromNode(statement.name.text, statement.name);
+					addSymbolFromNode(statement.name.text, statement.name);
+				}
+			} else if (ts.isClassDeclaration(statement) && statement.name) {
+				if (roactSymbolNameSet.has(statement.name.text)) {
+					addSymbolFromNode(statement.name.text, statement.name);
 				}
 			} else if (ts.isVariableStatement(statement)) {
 				const nameNode = statement.declarationList.declarations[0].name;
 				assert(ts.isIdentifier(nameNode));
 				if (roactSymbolNameSet.has(nameNode.text)) {
-					this.addSymbolFromNode(nameNode.text, nameNode);
+					addSymbolFromNode(nameNode.text, nameNode);
 				}
 			}
 		}
@@ -76,7 +72,7 @@ export class RoactSymbolManager {
 		}
 
 		// JSX intrinsic elements
-		for (const symbol of this.typeChecker.getJsxIntrinsicTagNamesAt(this.roactIndexSourceFile)) {
+		for (const symbol of typeChecker.getJsxIntrinsicTagNamesAt(roactIndexSourceFile)) {
 			assert(ts.isPropertySignature(symbol.valueDeclaration));
 			assert(symbol.valueDeclaration.type && ts.isTypeReferenceNode(symbol.valueDeclaration.type));
 			const className = symbol.valueDeclaration.type.typeArguments?.[0].getText();
@@ -93,5 +89,10 @@ export class RoactSymbolManager {
 
 	public getIntrinsicElementClassNameFromSymbol(symbol: ts.Symbol) {
 		return this.jsxIntrinsicNameMap.get(symbol);
+	}
+
+	public isElementType(type: ts.Type) {
+		const symbol = this.getSymbolOrThrow(ROACT_SYMBOL_NAMES.Element);
+		return isSomeType(type, t => t.symbol === symbol);
 	}
 }

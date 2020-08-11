@@ -1,5 +1,5 @@
 import ts from "byots";
-import * as lua from "LuaAST";
+import luau from "LuauAST";
 import { diagnostics } from "Shared/diagnostics";
 import { assert } from "Shared/util/assert";
 import { TransformState } from "TSTransformer";
@@ -8,32 +8,34 @@ import { transformObjectBindingLiteral } from "TSTransformer/nodes/binding/trans
 import { transformExpression } from "TSTransformer/nodes/expressions/transformExpression";
 import { transformInitializer } from "TSTransformer/nodes/transformInitializer";
 import { transformLogical } from "TSTransformer/nodes/transformLogical";
+import { transformWritableAssignment, transformWritableExpression } from "TSTransformer/nodes/transformWritable";
 import {
-	transformWritableAssignmentWithType,
-	transformWritableExpression,
-} from "TSTransformer/nodes/transformWritable";
-import { createAssignmentExpression, createCompoundAssignmentExpression } from "TSTransformer/util/assignment";
+	createAssignmentExpression,
+	createCompoundAssignmentExpression,
+	getSimpleAssignmentOperator,
+} from "TSTransformer/util/assignment";
 import { getSubType } from "TSTransformer/util/binding/getSubType";
+import { convertToIndexableExpression } from "TSTransformer/util/convertToIndexableExpression";
 import { createBinaryFromOperator } from "TSTransformer/util/createBinaryFromOperator";
 import { ensureTransformOrder } from "TSTransformer/util/ensureTransformOrder";
 import { isUsedAsStatement } from "TSTransformer/util/isUsedAsStatement";
 import { skipDownwards } from "TSTransformer/util/traversal";
-import { isLuaTupleType } from "TSTransformer/util/types";
+import { isLuaTupleType, isNumberType, isStringSimpleType, isStringType } from "TSTransformer/util/types";
 import { validateNotAnyType } from "TSTransformer/util/validateNotAny";
-import { convertToIndexableExpression } from "TSTransformer/util/convertToIndexableExpression";
+import { wrapToString } from "TSTransformer/util/wrapToString";
 
 function transformLuaTupleDestructure(
 	state: TransformState,
 	bindingLiteral: ts.ArrayLiteralExpression,
-	value: lua.Expression,
+	value: luau.Expression,
 	accessType: ts.Type,
 ) {
 	let index = 0;
-	const writes = lua.list.make<lua.WritableExpression>();
+	const writes = luau.list.make<luau.WritableExpression>();
 	const statements = state.capturePrereqs(() => {
 		for (let element of bindingLiteral.elements) {
 			if (ts.isOmittedExpression(element)) {
-				lua.list.push(writes, lua.emptyId());
+				luau.list.push(writes, luau.emptyId());
 			} else if (ts.isSpreadElement(element)) {
 				state.addDiagnostic(diagnostics.noSpreadDestructuring(element));
 			} else {
@@ -49,20 +51,20 @@ function transformLuaTupleDestructure(
 					ts.isPropertyAccessExpression(element)
 				) {
 					const id = transformWritableExpression(state, element, true);
-					lua.list.push(writes, id);
+					luau.list.push(writes, id);
 					if (initializer) {
 						state.prereq(transformInitializer(state, id, initializer));
 					}
 				} else if (ts.isArrayLiteralExpression(element)) {
-					const id = lua.tempId();
-					lua.list.push(writes, id);
+					const id = luau.tempId();
+					luau.list.push(writes, id);
 					if (initializer) {
 						state.prereq(transformInitializer(state, id, initializer));
 					}
 					transformArrayBindingLiteral(state, element, id, getSubType(state, accessType, index));
 				} else if (ts.isObjectLiteralExpression(element)) {
-					const id = lua.tempId();
-					lua.list.push(writes, id);
+					const id = luau.tempId();
+					luau.list.push(writes, id);
 					if (initializer) {
 						state.prereq(transformInitializer(state, id, initializer));
 					}
@@ -75,12 +77,110 @@ function transformLuaTupleDestructure(
 		}
 	});
 	state.prereq(
-		lua.create(lua.SyntaxKind.Assignment, {
+		luau.create(luau.SyntaxKind.Assignment, {
 			left: writes,
+			operator: "=",
 			right: value,
 		}),
 	);
 	state.prereqList(statements);
+}
+
+function createBinaryIn(left: luau.Expression, right: luau.Expression) {
+	const leftExp = luau.create(luau.SyntaxKind.ComputedIndexExpression, {
+		expression: convertToIndexableExpression(right),
+		index: left,
+	});
+	return luau.binary(leftExp, "~=", luau.nil());
+}
+
+function createBinaryInstanceOf(state: TransformState, left: luau.Expression, right: luau.Expression) {
+	left = state.pushToVarIfComplex(left);
+	right = state.pushToVarIfComplex(right);
+
+	const returnId = state.pushToVar(luau.bool(false));
+	const objId = luau.tempId();
+	const metatableId = luau.tempId();
+
+	state.prereq(
+		luau.create(luau.SyntaxKind.IfStatement, {
+			condition: luau.create(luau.SyntaxKind.BinaryExpression, {
+				left: luau.create(luau.SyntaxKind.CallExpression, {
+					expression: luau.globals.type,
+					args: luau.list.make(left),
+				}),
+				operator: "==",
+				right: luau.string("table"),
+			}),
+			statements: luau.list.make<luau.Statement>(
+				// objId = getmetatable(obj)
+				luau.create(luau.SyntaxKind.VariableDeclaration, {
+					left: objId,
+					right: luau.create(luau.SyntaxKind.CallExpression, {
+						expression: luau.globals.getmetatable,
+						args: luau.list.make(left),
+					}),
+				}),
+				luau.create(luau.SyntaxKind.WhileStatement, {
+					// objId ~= nil
+					condition: luau.create(luau.SyntaxKind.BinaryExpression, {
+						left: objId,
+						operator: "~=",
+						right: luau.nil(),
+					}),
+					statements: luau.list.make<luau.Statement>(
+						luau.create(luau.SyntaxKind.IfStatement, {
+							// objId == class
+							condition: luau.create(luau.SyntaxKind.BinaryExpression, {
+								left: objId,
+								operator: "==",
+								right,
+							}),
+							statements: luau.list.make<luau.Statement>(
+								// returnId = true
+								// break
+								luau.create(luau.SyntaxKind.Assignment, {
+									left: returnId,
+									operator: "=",
+									right: luau.bool(true),
+								}),
+								luau.create(luau.SyntaxKind.BreakStatement, {}),
+							),
+							elseBody: luau.list.make<luau.Statement>(
+								// local metatableId = getmetatable(objId)
+								luau.create(luau.SyntaxKind.VariableDeclaration, {
+									left: metatableId,
+									right: luau.create(luau.SyntaxKind.CallExpression, {
+										expression: luau.globals.getmetatable,
+										args: luau.list.make(objId),
+									}),
+								}),
+								// if metatableId then
+								luau.create(luau.SyntaxKind.IfStatement, {
+									condition: metatableId,
+									statements: luau.list.make(
+										// objId = metatableId.__index
+										luau.create(luau.SyntaxKind.Assignment, {
+											left: objId,
+											operator: "=",
+											right: luau.create(luau.SyntaxKind.PropertyAccessExpression, {
+												expression: metatableId,
+												name: "__index",
+											}),
+										}),
+									),
+									elseBody: luau.list.make(luau.create(luau.SyntaxKind.BreakStatement, {})),
+								}),
+							),
+						}),
+					),
+				}),
+			),
+			elseBody: luau.list.make(),
+		}),
+	);
+
+	return returnId;
 }
 
 export function transformBinaryExpression(state: TransformState, node: ts.BinaryExpression) {
@@ -92,13 +192,13 @@ export function transformBinaryExpression(state: TransformState, node: ts.Binary
 	// banned
 	if (operatorKind === ts.SyntaxKind.EqualsEqualsToken) {
 		state.addDiagnostic(diagnostics.noEqualsEquals(node));
-		return lua.emptyId();
+		return luau.emptyId();
 	} else if (operatorKind === ts.SyntaxKind.ExclamationEqualsToken) {
 		state.addDiagnostic(diagnostics.noExclamationEquals(node));
-		return lua.emptyId();
+		return luau.emptyId();
 	} else if (operatorKind === ts.SyntaxKind.CommaToken) {
 		state.addDiagnostic(diagnostics.noComma(node));
-		return lua.emptyId();
+		return luau.emptyId();
 	}
 
 	// logical
@@ -116,12 +216,12 @@ export function transformBinaryExpression(state: TransformState, node: ts.Binary
 			const rightExp = transformExpression(state, node.right);
 			const accessType = state.getType(node.right);
 
-			if (lua.isCall(rightExp) && isLuaTupleType(state, accessType)) {
+			if (luau.isCall(rightExp) && isLuaTupleType(state, accessType)) {
 				transformLuaTupleDestructure(state, node.left, rightExp, accessType);
 				if (!isUsedAsStatement(node)) {
 					state.addDiagnostic(diagnostics.noDestructureAssignmentExpression(node));
 				}
-				return lua.emptyId();
+				return luau.emptyId();
 			}
 
 			const parentId = state.pushToVar(rightExp);
@@ -134,47 +234,65 @@ export function transformBinaryExpression(state: TransformState, node: ts.Binary
 			return parentId;
 		}
 
-		const { writable, readable, value } = transformWritableAssignmentWithType(
+		const writableType = state.getType(node.left);
+		const valueType = state.getType(node.right);
+		const rightSimpleType = state.getSimpleType(valueType);
+		const operator = getSimpleAssignmentOperator(
+			state.getSimpleType(writableType),
+			operatorKind as ts.AssignmentOperator,
+			rightSimpleType,
+		);
+		const { writable, readable, value } = transformWritableAssignment(
 			state,
 			node.left,
 			node.right,
-			ts.isCompoundAssignment(operatorKind),
+			operator === undefined,
 		);
-		if (ts.isCompoundAssignment(operatorKind)) {
-			return createCompoundAssignmentExpression(state, writable, readable, operatorKind, value);
+		if (operator !== undefined) {
+			return createAssignmentExpression(
+				state,
+				writable,
+				operator,
+				operator === "..=" && !isStringSimpleType(rightSimpleType) ? wrapToString(value) : value,
+			);
 		} else {
-			return createAssignmentExpression(state, writable.node, value.node);
+			return createCompoundAssignmentExpression(
+				state,
+				writable,
+				writableType,
+				readable,
+				operatorKind,
+				value,
+				valueType,
+			);
 		}
 	}
 
 	const [left, right] = ensureTransformOrder(state, [node.left, node.right]);
 
-	// in
 	if (operatorKind === ts.SyntaxKind.InKeyword) {
-		return lua.create(lua.SyntaxKind.BinaryExpression, {
-			left: lua.create(lua.SyntaxKind.ComputedIndexExpression, {
-				expression: convertToIndexableExpression(right),
-				index: left,
-			}),
-			operator: "~=",
-			right: lua.nil(),
-		});
+		return createBinaryIn(left, right);
 	} else if (operatorKind === ts.SyntaxKind.InstanceOfKeyword) {
-		return lua.create(lua.SyntaxKind.CallExpression, {
-			expression: state.TS("instanceof"),
-			args: lua.list.make(left, right),
-		});
+		return createBinaryInstanceOf(state, left, right);
 	}
 
-	return createBinaryFromOperator(
-		{
-			node: left,
-			type: state.getSimpleTypeFromNode(node.left),
-		},
-		operatorKind,
-		{
-			node: right,
-			type: state.getSimpleTypeFromNode(node.right),
-		},
-	);
+	const leftType = state.getType(node.left);
+	const rightType = state.getType(node.right);
+
+	// TODO issue #715
+	if (
+		operatorKind === ts.SyntaxKind.LessThanToken ||
+		operatorKind === ts.SyntaxKind.LessThanEqualsToken ||
+		operatorKind === ts.SyntaxKind.GreaterThanToken ||
+		operatorKind === ts.SyntaxKind.GreaterThanEqualsToken
+	) {
+		if (
+			(!isStringType(leftType) && !isNumberType(leftType)) ||
+			(!isStringType(rightType) && !isNumberType(rightType))
+		) {
+			state.addDiagnostic(diagnostics.noNonNumberStringRelationOperator(node));
+		}
+	}
+
+	return createBinaryFromOperator(state, left, leftType, operatorKind, right, rightType);
 }

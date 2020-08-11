@@ -1,8 +1,8 @@
 import ts from "byots";
-import * as lua from "LuaAST";
+import luau from "LuauAST";
 import { diagnostics } from "Shared/diagnostics";
 import { TransformState } from "TSTransformer";
-import { transformExpression } from "TSTransformer/nodes/expressions/transformExpression";
+import { transformReturnStatementInner } from "TSTransformer/nodes/statements/transformReturnStatement";
 import { transformParameters } from "TSTransformer/nodes/transformParameters";
 import { transformStatementList } from "TSTransformer/nodes/transformStatementList";
 
@@ -15,17 +15,25 @@ export function transformFunctionExpression(state: TransformState, node: ts.Func
 
 	const body = node.body;
 	if (ts.isFunctionBody(body)) {
-		lua.list.pushList(statements, transformStatementList(state, body.statements));
+		luau.list.pushList(statements, transformStatementList(state, body.statements));
 	} else {
-		const { expression, statements: expressionPrereqs } = state.capture(() => transformExpression(state, body));
-		lua.list.pushList(statements, expressionPrereqs);
-		lua.list.push(
-			statements,
-			lua.create(lua.SyntaxKind.ReturnStatement, {
-				expression,
-			}),
-		);
+		const [returnStatement, prereqs] = state.capture(() => transformReturnStatementInner(state, body));
+		luau.list.pushList(statements, prereqs);
+		luau.list.push(statements, returnStatement);
 	}
 
-	return lua.create(lua.SyntaxKind.FunctionExpression, { statements, parameters, hasDotDotDot });
+	let expression: luau.Expression = luau.create(luau.SyntaxKind.FunctionExpression, {
+		hasDotDotDot,
+		parameters,
+		statements,
+	});
+
+	if (!!(node.modifierFlagsCache & ts.ModifierFlags.Async)) {
+		expression = luau.create(luau.SyntaxKind.CallExpression, {
+			expression: state.TS("async"),
+			args: luau.list.make(expression),
+		});
+	}
+
+	return expression;
 }

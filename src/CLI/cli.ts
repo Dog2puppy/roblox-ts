@@ -1,38 +1,41 @@
 #!/usr/bin/env node
 
 import { CLIError } from "CLI/errors/CLIError";
+import { COMPILER_VERSION, PACKAGE_ROOT } from "Shared/constants";
 import yargs from "yargs";
 
-const cli = yargs
+yargs
 	// help
-	.usage("roblox-ts - A TypeScript-to-Lua Compiler for Roblox")
+	.usage("roblox-ts - A TypeScript-to-Luau Compiler for Roblox")
 	.help("help")
 	.alias("h", "help")
 	.describe("help", "show help information")
 
 	// version
-	.version()
+	.version(COMPILER_VERSION)
 	.alias("v", "version")
 	.describe("version", "show version information")
 
 	// commands
-	.commandDir(`${__dirname}/commands`)
+	.commandDir(`${PACKAGE_ROOT}/out/CLI/commands`)
 
 	// options
 	.recommendCommands()
 	.strict()
-	.wrap(yargs.terminalWidth());
+	.wrap(yargs.terminalWidth())
 
-// Entry point
-try {
-	// Attempt to parse the arguments passed through the CLI
-	// Run associated commands after parse
-	cli.parse();
-} catch (e) {
-	// Catch recognized errors and log
-	if (e instanceof CLIError) {
-		e.log();
-	} else {
-		throw e;
-	}
-}
+	// execute
+	.fail((str, e: unknown) => {
+		if (e instanceof CLIError) {
+			e.log();
+		} else {
+			// eslint-disable-next-line no-console
+			console.log(str);
+			if (e) {
+				// eslint-disable-next-line no-console
+				console.log(e);
+			}
+		}
+		process.exit(1);
+	})
+	.parse();

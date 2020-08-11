@@ -1,5 +1,5 @@
 import ts from "byots";
-import * as lua from "LuaAST";
+import luau from "LuauAST";
 import { findLastIndex } from "Shared/util/findLastIndex";
 import { TransformState } from "TSTransformer";
 import { transformExpression } from "TSTransformer/nodes/expressions/transformExpression";
@@ -7,15 +7,23 @@ import { isDefinedAsLet } from "TSTransformer/util/isDefinedAsLet";
 
 /**
  * Takes an array of `ts.Expression` and transforms each, capturing prereqs. Returns the transformed nodes.
- * Ensures the `lua.Expression` nodes execute in the same order as the `ts.Expression` nodes.
+ * Ensures the `luau.Expression` nodes execute in the same order as the `ts.Expression` nodes.
  */
-export function ensureTransformOrder(state: TransformState, expressions: ReadonlyArray<ts.Expression>) {
-	const expressionInfoList = expressions.map(exp => state.capture(() => transformExpression(state, exp)));
-	const lastArgWithPrereqsIndex = findLastIndex(expressionInfoList, info => !lua.list.isEmpty(info.statements));
-	const result = new Array<lua.Expression>();
+export function ensureTransformOrder(
+	state: TransformState,
+	expressions: ReadonlyArray<ts.Expression>,
+	transformer: (
+		state: TransformState,
+		expression: ts.Expression,
+		index: number,
+	) => luau.Expression = transformExpression,
+) {
+	const expressionInfoList = expressions.map((exp, index) => state.capture(() => transformer(state, exp, index)));
+	const lastArgWithPrereqsIndex = findLastIndex(expressionInfoList, info => !luau.list.isEmpty(info[1]));
+	const result = new Array<luau.Expression>();
 	for (let i = 0; i < expressionInfoList.length; i++) {
 		const info = expressionInfoList[i];
-		state.prereqList(info.statements);
+		state.prereqList(info[1]);
 
 		let isConstVar = false;
 		const exp = expressions[i];
@@ -26,11 +34,11 @@ export function ensureTransformOrder(state: TransformState, expressions: Readonl
 			}
 		}
 
-		let expression = info.expression;
+		let expression = info[0];
 		if (
 			i < lastArgWithPrereqsIndex &&
-			!lua.isSimplePrimitive(expression) &&
-			!lua.isTemporaryIdentifier(expression) &&
+			!luau.isSimplePrimitive(expression) &&
+			!luau.isTemporaryIdentifier(expression) &&
 			!isConstVar
 		) {
 			expression = state.pushToVar(expression);

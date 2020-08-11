@@ -1,55 +1,52 @@
 import ts from "byots";
-import * as lua from "LuaAST";
+import luau from "LuauAST";
 import { assert } from "Shared/util/assert";
 import { TransformState } from "TSTransformer";
-import { transformArrayBindingPattern } from "TSTransformer/nodes/binding/transformArrayBindingPattern";
-import { transformObjectBindingPattern } from "TSTransformer/nodes/binding/transformObjectBindingPattern";
+import { transformBindingName } from "TSTransformer/nodes/binding/transformBindingName";
 import { transformExpression } from "TSTransformer/nodes/expressions/transformExpression";
-import { transformIdentifierDefined } from "TSTransformer/nodes/expressions/transformIdentifier";
 import { transformInitializer } from "TSTransformer/nodes/transformInitializer";
 import { transformStatementList } from "TSTransformer/nodes/transformStatementList";
 import { getStatements } from "TSTransformer/util/getStatements";
 import { isArrayType, isMapType, isSetType, isStringType } from "TSTransformer/util/types";
-import { transformBindingName } from "TSTransformer/nodes/binding/transformBindingName";
 
-const wrapFactory = (global: lua.IndexableExpression) => (expression: lua.Expression) =>
-	lua.create(lua.SyntaxKind.CallExpression, {
+const wrapFactory = (global: luau.IndexableExpression) => (expression: luau.Expression) =>
+	luau.create(luau.SyntaxKind.CallExpression, {
 		expression: global,
-		args: lua.list.make(expression),
+		args: luau.list.make(expression),
 	});
 
-const wrapIpairs = wrapFactory(lua.globals.ipairs);
-const wrapPairs = wrapFactory(lua.globals.pairs);
+const wrapIpairs = wrapFactory(luau.globals.ipairs);
+const wrapPairs = wrapFactory(luau.globals.pairs);
 
 function getArrayLoopStructure(
 	state: TransformState,
-	ids: lua.List<lua.AnyIdentifier>,
-	initializers: lua.List<lua.Statement>,
+	ids: luau.List<luau.AnyIdentifier>,
+	initializers: luau.List<luau.Statement>,
 	name: ts.BindingName,
-	innerExp: lua.Expression,
+	innerExp: luau.Expression,
 ) {
-	lua.list.push(ids, lua.emptyId());
-	lua.list.push(ids, transformBindingName(state, name, initializers));
+	luau.list.push(ids, luau.emptyId());
+	luau.list.push(ids, transformBindingName(state, name, initializers));
 	return wrapIpairs(innerExp);
 }
 
 function getSetLoopStructure(
 	state: TransformState,
-	ids: lua.List<lua.AnyIdentifier>,
-	initializers: lua.List<lua.Statement>,
+	ids: luau.List<luau.AnyIdentifier>,
+	initializers: luau.List<luau.Statement>,
 	name: ts.BindingName,
-	innerExp: lua.Expression,
+	innerExp: luau.Expression,
 ) {
-	lua.list.push(ids, transformBindingName(state, name, initializers));
+	luau.list.push(ids, transformBindingName(state, name, initializers));
 	return wrapPairs(innerExp);
 }
 
 function getMapLoopStructure(
 	state: TransformState,
-	ids: lua.List<lua.AnyIdentifier>,
-	initializers: lua.List<lua.Statement>,
+	ids: luau.List<luau.AnyIdentifier>,
+	initializers: luau.List<luau.Statement>,
 	name: ts.BindingName,
-	innerExp: lua.Expression,
+	innerExp: luau.Expression,
 ) {
 	// optimized
 	if (ts.isArrayBindingPattern(name)) {
@@ -58,38 +55,38 @@ function getMapLoopStructure(
 
 		const firstElement = name.elements[0];
 		if (firstElement === undefined || ts.isOmittedExpression(firstElement)) {
-			lua.list.push(ids, lua.emptyId());
+			luau.list.push(ids, luau.emptyId());
 		} else {
 			const id = transformBindingName(state, firstElement.name, initializers);
-			lua.list.push(ids, id);
+			luau.list.push(ids, id);
 			if (firstElement.initializer) {
-				lua.list.push(initializers, transformInitializer(state, id, firstElement.initializer));
+				luau.list.push(initializers, transformInitializer(state, id, firstElement.initializer));
 			}
 		}
 
 		const secondElement = name.elements[1];
 		if (secondElement !== undefined && !ts.isOmittedExpression(secondElement)) {
 			const id = transformBindingName(state, secondElement.name, initializers);
-			lua.list.push(ids, id);
+			luau.list.push(ids, id);
 			if (secondElement.initializer) {
-				lua.list.push(initializers, transformInitializer(state, id, secondElement.initializer));
+				luau.list.push(initializers, transformInitializer(state, id, secondElement.initializer));
 			}
 		}
 
 		return wrapPairs(innerExp);
 	}
 
-	const keyId = lua.tempId();
-	const valueId = lua.tempId();
-	lua.list.push(ids, keyId);
-	lua.list.push(ids, valueId);
+	const keyId = luau.tempId();
+	const valueId = luau.tempId();
+	luau.list.push(ids, keyId);
+	luau.list.push(ids, valueId);
 
 	const id = transformBindingName(state, name, initializers);
-	lua.list.unshift(
+	luau.list.unshift(
 		initializers,
-		lua.create(lua.SyntaxKind.VariableDeclaration, {
+		luau.create(luau.SyntaxKind.VariableDeclaration, {
 			left: id,
-			right: lua.array([keyId, valueId]),
+			right: luau.array([keyId, valueId]),
 		}),
 	);
 
@@ -98,22 +95,22 @@ function getMapLoopStructure(
 
 function getStringLoopStructure(
 	state: TransformState,
-	ids: lua.List<lua.AnyIdentifier>,
-	initializers: lua.List<lua.Statement>,
+	ids: luau.List<luau.AnyIdentifier>,
+	initializers: luau.List<luau.Statement>,
 	name: ts.BindingName,
-	innerExp: lua.Expression,
+	innerExp: luau.Expression,
 ) {
-	lua.list.push(ids, transformBindingName(state, name, initializers));
-	return lua.create(lua.SyntaxKind.CallExpression, {
-		expression: lua.globals.string.gmatch,
-		args: lua.list.make(innerExp, lua.globals.utf8.charpattern),
+	luau.list.push(ids, transformBindingName(state, name, initializers));
+	return luau.create(luau.SyntaxKind.CallExpression, {
+		expression: luau.globals.string.gmatch,
+		args: luau.list.make(innerExp, luau.globals.utf8.charpattern),
 	});
 }
 
-function getLoopStructure(state: TransformState, name: ts.BindingName, innerExp: lua.Expression, expType: ts.Type) {
-	const ids = lua.list.make<lua.AnyIdentifier>();
-	const initializers = lua.list.make<lua.Statement>();
-	let expression: lua.Expression;
+function getLoopStructure(state: TransformState, name: ts.BindingName, innerExp: luau.Expression, expType: ts.Type) {
+	const ids = luau.list.make<luau.AnyIdentifier>();
+	const initializers = luau.list.make<luau.Statement>();
+	let expression: luau.Expression;
 	if (isArrayType(state, expType)) {
 		expression = getArrayLoopStructure(state, ids, initializers, name, innerExp);
 	} else if (isSetType(state, expType)) {
@@ -123,7 +120,7 @@ function getLoopStructure(state: TransformState, name: ts.BindingName, innerExp:
 	} else if (isStringType(expType)) {
 		expression = getStringLoopStructure(state, ids, initializers, name, innerExp);
 	} else {
-		assert(false);
+		assert(false, "Not implemented");
 	}
 	return { ids, expression, initializers };
 }
@@ -134,20 +131,18 @@ export function transformForOfStatement(state: TransformState, node: ts.ForOfSta
 
 	const name = node.initializer.declarations[0].name;
 
-	const result = lua.list.make<lua.Statement>();
+	const result = luau.list.make<luau.Statement>();
 
-	const { expression: innerExp, statements: innerExpPrereqs } = state.capture(() =>
-		transformExpression(state, node.expression),
-	);
-	lua.list.pushList(result, innerExpPrereqs);
+	const [innerExp, innerExpPrereqs] = state.capture(() => transformExpression(state, node.expression));
+	luau.list.pushList(result, innerExpPrereqs);
 
 	const expType = state.getType(node.expression);
 
 	const statements = transformStatementList(state, getStatements(node.statement));
 	const { ids, expression, initializers } = getLoopStructure(state, name, innerExp, expType);
-	lua.list.unshiftList(statements, initializers);
+	luau.list.unshiftList(statements, initializers);
 
-	lua.list.push(result, lua.create(lua.SyntaxKind.ForStatement, { ids, expression, statements }));
+	luau.list.push(result, luau.create(luau.SyntaxKind.ForStatement, { ids, expression, statements }));
 
 	return result;
 }

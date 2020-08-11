@@ -1,10 +1,7 @@
 import ts from "byots";
-import chalk from "chalk";
+import kleur from "kleur";
 import path from "path";
 import { ProjectError } from "Shared/errors/ProjectError";
-
-// force colors
-chalk.level = chalk.Level.Basic;
 
 const ENFORCED_OPTIONS = {
 	target: ts.ScriptTarget.ESNext,
@@ -12,20 +9,11 @@ const ENFORCED_OPTIONS = {
 	noLib: true,
 	strict: true,
 	allowSyntheticDefaultImports: true,
-	isolatedModules: true,
 } as const;
 
-interface ExtraOptionChecks {
-	typeRoots: Exclude<ts.CompilerOptions["typeRoots"], undefined>;
-	rootDir: Exclude<ts.CompilerOptions["rootDir"], undefined>;
-	outDir: Exclude<ts.CompilerOptions["outDir"], undefined>;
-	jsx?: ts.JsxEmit.React;
-	jsxFactory?: "Roact.createElement";
-}
-
-/** shorthand for chalk.yellowBright */
+/** shorthand for kleur.yellow */
 function y(str: string) {
-	return chalk.yellowBright(str);
+	return kleur.yellow(str);
 }
 
 function validateTypeRoots(nodeModulesPath: string, typeRoots: Array<string>) {
@@ -38,10 +26,7 @@ function validateTypeRoots(nodeModulesPath: string, typeRoots: Array<string>) {
 	return false;
 }
 
-export function validateCompilerOptions(
-	opts: ts.CompilerOptions,
-	nodeModulesPath: string,
-): asserts opts is ts.CompilerOptions & typeof ENFORCED_OPTIONS & ExtraOptionChecks {
+export function validateCompilerOptions(opts: ts.CompilerOptions, nodeModulesPath: string) {
 	const errors = new Array<string>();
 
 	// required compiler options
@@ -65,17 +50,13 @@ export function validateCompilerOptions(
 		errors.push(`${y(`"allowSyntheticDefaultImports"`)} must be ${y(`true`)}`);
 	}
 
-	if (opts.isolatedModules !== ENFORCED_OPTIONS.isolatedModules) {
-		errors.push(`${y(`"isolatedModules"`)} must be ${y(`true`)}`);
-	}
-
 	if (opts.typeRoots === undefined || !validateTypeRoots(nodeModulesPath, opts.typeRoots)) {
-		errors.push(`${y(`"typeRoots"`)} must contain ${y(`[ "node_modules/@rbxts" ]`)}`);
+		errors.push(`${y(`"typeRoots"`)} must contain ${y(nodeModulesPath)}`);
 	}
 
 	// configurable compiler options
-	if (opts.rootDir === undefined) {
-		errors.push(`${y(`"rootDir"`)} must be defined`);
+	if (opts.rootDir === undefined && opts.rootDirs === undefined) {
+		errors.push(`${y(`"rootDir"`)} or ${y(`"rootDirs"`)} must be defined`);
 	}
 
 	if (opts.outDir === undefined) {

@@ -1,32 +1,49 @@
 import ts from "byots";
-import * as lua from "LuaAST";
+import luau from "LuauAST";
 import { diagnostics } from "Shared/diagnostics";
 import { assert } from "Shared/util/assert";
 import { TransformState } from "TSTransformer";
 import { transformExpression } from "TSTransformer/nodes/expressions/transformExpression";
 import { transformIdentifierDefined } from "TSTransformer/nodes/expressions/transformIdentifier";
 
+function hasMultipleDefinitions(symbol: ts.Symbol): boolean {
+	let amtValueDefinitions = 0;
+	const declarations = symbol.getDeclarations();
+	if (declarations) {
+		for (const declaration of declarations) {
+			if (ts.isEnumDeclaration(declaration) && !!(declaration.modifierFlagsCache & ts.ModifierFlags.Const)) {
+				amtValueDefinitions++;
+				if (amtValueDefinitions > 1) {
+					return true;
+				}
+			}
+		}
+	}
+	return false;
+}
+
 export function transformEnumDeclaration(state: TransformState, node: ts.EnumDeclaration) {
-	if (node.modifiers?.find(modifier => modifier.kind === ts.SyntaxKind.ConstKeyword)) {
-		return lua.list.make<lua.Statement>();
+	if (!!(node.modifierFlagsCache & ts.ModifierFlags.Const)) {
+		return luau.list.make<luau.Statement>();
 	}
 
 	const symbol = state.typeChecker.getSymbolAtLocation(node.name);
-	if (symbol && symbol.declarations.length > 1) {
+	if (symbol && hasMultipleDefinitions(symbol)) {
 		state.addDiagnostic(diagnostics.noEnumMerging(node));
-		return lua.list.make<lua.Statement>();
+		return luau.list.make<luau.Statement>();
 	}
 
 	const id = transformIdentifierDefined(state, node.name);
 
 	const statements = state.capturePrereqs(() => {
-		const inverseId = state.pushToVar(lua.map());
+		const inverseId = state.pushToVar(luau.map());
 		state.prereq(
-			lua.create(lua.SyntaxKind.Assignment, {
+			luau.create(luau.SyntaxKind.Assignment, {
 				left: id,
-				right: lua.create(lua.SyntaxKind.CallExpression, {
-					expression: lua.globals.setmetatable,
-					args: lua.list.make(lua.map(), lua.map([[lua.strings.__index, inverseId]])),
+				operator: "=",
+				right: luau.create(luau.SyntaxKind.CallExpression, {
+					expression: luau.globals.setmetatable,
+					args: luau.list.make(luau.map(), luau.map([[luau.strings.__index, inverseId]])),
 				}),
 			}),
 		);
@@ -38,40 +55,42 @@ export function transformEnumDeclaration(state: TransformState, node: ts.EnumDec
 			const nameStr = member.name.text;
 			const value = state.typeChecker.getConstantValue(member);
 
-			let valueExp: lua.Expression;
+			let valueExp: luau.Expression;
 			if (typeof value === "string") {
-				valueExp = lua.string(value);
+				valueExp = luau.string(value);
 			} else if (typeof value === "number") {
-				valueExp = lua.number(value);
+				valueExp = luau.number(value);
 			} else {
 				assert(member.initializer);
 				valueExp = state.pushToVarIfComplex(transformExpression(state, member.initializer));
 			}
 
 			state.prereq(
-				lua.create(lua.SyntaxKind.Assignment, {
-					left: lua.create(lua.SyntaxKind.PropertyAccessExpression, {
+				luau.create(luau.SyntaxKind.Assignment, {
+					left: luau.create(luau.SyntaxKind.PropertyAccessExpression, {
 						expression: id,
 						name: nameStr,
 					}),
+					operator: "=",
 					right: valueExp,
 				}),
 			);
 
 			state.prereq(
-				lua.create(lua.SyntaxKind.Assignment, {
-					left: lua.create(lua.SyntaxKind.ComputedIndexExpression, {
+				luau.create(luau.SyntaxKind.Assignment, {
+					left: luau.create(luau.SyntaxKind.ComputedIndexExpression, {
 						expression: inverseId,
 						index: valueExp,
 					}),
-					right: lua.string(nameStr),
+					operator: "=",
+					right: luau.string(nameStr),
 				}),
 			);
 		}
 	});
 
-	return lua.list.make<lua.Statement>(
-		lua.create(lua.SyntaxKind.VariableDeclaration, { left: id, right: undefined }),
-		lua.create(lua.SyntaxKind.DoStatement, { statements }),
+	return luau.list.make<luau.Statement>(
+		luau.create(luau.SyntaxKind.VariableDeclaration, { left: id, right: undefined }),
+		luau.create(luau.SyntaxKind.DoStatement, { statements }),
 	);
 }

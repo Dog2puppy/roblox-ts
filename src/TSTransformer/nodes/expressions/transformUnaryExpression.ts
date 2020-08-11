@@ -1,14 +1,9 @@
 import ts from "byots";
-import * as lua from "LuaAST";
+import luau from "LuauAST";
 import { assert } from "Shared/util/assert";
 import { TransformState } from "TSTransformer";
 import { transformExpression } from "TSTransformer/nodes/expressions/transformExpression";
-import {
-	transformWritableExpression,
-	transformWritableExpressionWithType,
-} from "TSTransformer/nodes/transformWritable";
-import { createCompoundAssignmentExpression } from "TSTransformer/util/assignment";
-import { createNodeWithType } from "TSTransformer/util/createNodeWithType";
+import { transformWritableExpression } from "TSTransformer/nodes/transformWritable";
 import { createTruthinessChecks } from "TSTransformer/util/createTruthinessChecks";
 import { validateNotAnyType } from "TSTransformer/util/validateNotAny";
 
@@ -16,26 +11,22 @@ export function transformPostfixUnaryExpression(state: TransformState, node: ts.
 	validateNotAnyType(state, node.operand);
 
 	const writable = transformWritableExpression(state, node.operand, true);
-	const origValue = lua.tempId();
+	const origValue = luau.tempId();
 
 	state.prereq(
-		lua.create(lua.SyntaxKind.VariableDeclaration, {
+		luau.create(luau.SyntaxKind.VariableDeclaration, {
 			left: origValue,
 			right: writable,
 		}),
 	);
 
-	const readable = lua.isAnyIdentifier(writable) ? writable : origValue;
-	const operator: lua.BinaryOperator = node.operator === ts.SyntaxKind.PlusPlusToken ? "+" : "-";
+	const operator: luau.AssignmentOperator = node.operator === ts.SyntaxKind.PlusPlusToken ? "+=" : "-=";
 
 	state.prereq(
-		lua.create(lua.SyntaxKind.Assignment, {
+		luau.create(luau.SyntaxKind.Assignment, {
 			left: writable,
-			right: lua.create(lua.SyntaxKind.BinaryExpression, {
-				left: readable,
-				operator,
-				right: lua.number(1),
-			}),
+			operator,
+			right: luau.number(1),
 		}),
 	);
 
@@ -46,28 +37,25 @@ export function transformPrefixUnaryExpression(state: TransformState, node: ts.P
 	validateNotAnyType(state, node.operand);
 
 	if (node.operator === ts.SyntaxKind.PlusPlusToken || node.operator === ts.SyntaxKind.MinusMinusToken) {
-		const writable = transformWritableExpressionWithType(state, node.operand, true);
-		return createCompoundAssignmentExpression(
-			state,
-			writable,
-			writable,
-			node.operator,
-			createNodeWithType(lua.number(1)),
+		const writable = transformWritableExpression(state, node.operand, true);
+		const operator: luau.AssignmentOperator = node.operator === ts.SyntaxKind.PlusPlusToken ? "+=" : "-=";
+		state.prereq(
+			luau.create(luau.SyntaxKind.Assignment, {
+				left: writable,
+				operator,
+				right: luau.number(1),
+			}),
 		);
+		return writable;
 	} else if (node.operator === ts.SyntaxKind.MinusToken) {
-		return lua.create(lua.SyntaxKind.UnaryExpression, {
-			expression: transformExpression(state, node.operand),
-			operator: "-",
-		});
+		return luau.unary("-", transformExpression(state, node.operand));
 	} else if (node.operator === ts.SyntaxKind.ExclamationToken) {
-		return lua.create(lua.SyntaxKind.UnaryExpression, {
-			expression: createTruthinessChecks(
-				state,
-				transformExpression(state, node.operand),
-				state.getType(node.operand),
-			),
-			operator: "not",
-		});
+		const checks = createTruthinessChecks(
+			state,
+			transformExpression(state, node.operand),
+			state.getType(node.operand),
+		);
+		return luau.unary("not", checks);
 	}
 	assert(false, `Unsupported PrefixUnaryExpression operator: ${ts.SyntaxKind[node.operator]}`);
 }

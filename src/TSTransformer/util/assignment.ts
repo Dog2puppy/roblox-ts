@@ -1,44 +1,58 @@
 import ts from "byots";
-import * as lua from "LuaAST";
+import luau from "LuauAST";
+import * as tsst from "ts-simple-type";
 import { TransformState } from "TSTransformer";
-import { NodeWithType } from "TSTransformer/types/NodeWithType";
 import { createBinaryFromOperator } from "TSTransformer/util/createBinaryFromOperator";
+import { isStringSimpleType } from "TSTransformer/util/types";
 
-export function createAssignmentStatement(writable: lua.WritableExpression, value: lua.Expression) {
-	return lua.create(lua.SyntaxKind.Assignment, {
-		left: writable,
-		right: value,
-	});
+const COMPOUND_OPERATOR_MAP = new Map<ts.SyntaxKind, luau.AssignmentOperator>([
+	// compound assignment
+	[ts.SyntaxKind.MinusEqualsToken, "-="],
+	[ts.SyntaxKind.AsteriskEqualsToken, "*="],
+	[ts.SyntaxKind.SlashEqualsToken, "/="],
+	[ts.SyntaxKind.AsteriskAsteriskEqualsToken, "^="],
+	[ts.SyntaxKind.PercentEqualsToken, "%="],
+
+	// unary
+	[ts.SyntaxKind.PlusPlusToken, "+="],
+	[ts.SyntaxKind.MinusMinusToken, "-="],
+
+	// normal assignment
+	[ts.SyntaxKind.EqualsToken, "="],
+]);
+
+export function getSimpleAssignmentOperator(
+	leftType: tsst.SimpleType,
+	operatorKind: ts.AssignmentOperator,
+	rightType: tsst.SimpleType,
+) {
+	// plus
+	if (operatorKind === ts.SyntaxKind.PlusEqualsToken) {
+		return isStringSimpleType(leftType) || isStringSimpleType(rightType) ? "..=" : "+=";
+	}
+
+	return COMPOUND_OPERATOR_MAP.get(operatorKind);
 }
 
 export function createAssignmentExpression(
 	state: TransformState,
-	readable: lua.WritableExpression,
-	value: lua.Expression,
+	readable: luau.WritableExpression,
+	operator: luau.AssignmentOperator,
+	value: luau.Expression,
 ) {
-	if (lua.isAnyIdentifier(readable)) {
-		state.prereq(
-			lua.create(lua.SyntaxKind.Assignment, {
-				left: readable,
-				right: value,
-			}),
-		);
-		return readable;
-	} else {
-		const id = state.pushToVar(value);
-		state.prereq(
-			lua.create(lua.SyntaxKind.Assignment, {
-				left: readable,
-				right: id,
-			}),
-		);
-		return id;
-	}
+	state.prereq(
+		luau.create(luau.SyntaxKind.Assignment, {
+			left: readable,
+			operator,
+			right: value,
+		}),
+	);
+	return readable;
 }
 
-function wrapRightIfDoubleBinary(expression: lua.Expression) {
-	if (lua.isBinaryExpression(expression) && lua.isBinaryExpression(expression.right)) {
-		expression.right = lua.create(lua.SyntaxKind.ParenthesizedExpression, {
+function wrapRightIfBinary(expression: luau.Expression) {
+	if (luau.isBinaryExpression(expression) && luau.isBinaryExpression(expression.right)) {
+		expression.right = luau.create(luau.SyntaxKind.ParenthesizedExpression, {
 			expression: expression.right,
 		});
 	}
@@ -46,27 +60,34 @@ function wrapRightIfDoubleBinary(expression: lua.Expression) {
 }
 
 export function createCompoundAssignmentStatement(
-	writable: NodeWithType<lua.WritableExpression>,
-	readable: NodeWithType<lua.WritableExpression>,
+	state: TransformState,
+	writable: luau.WritableExpression,
+	writableType: ts.Type,
+	readable: luau.WritableExpression,
 	operator: ts.SyntaxKind,
-	value: NodeWithType<lua.Expression>,
+	value: luau.Expression,
+	valueType: ts.Type,
 ) {
-	return createAssignmentStatement(
-		writable.node,
-		wrapRightIfDoubleBinary(createBinaryFromOperator(readable, operator, value)),
-	);
+	return luau.create(luau.SyntaxKind.Assignment, {
+		left: writable,
+		operator: "=",
+		right: wrapRightIfBinary(createBinaryFromOperator(state, readable, writableType, operator, value, valueType)),
+	});
 }
 
 export function createCompoundAssignmentExpression(
 	state: TransformState,
-	writable: NodeWithType<lua.WritableExpression>,
-	readable: NodeWithType<lua.WritableExpression>,
+	writable: luau.WritableExpression,
+	writableType: ts.Type,
+	readable: luau.WritableExpression,
 	operator: ts.SyntaxKind,
-	value: NodeWithType<lua.Expression>,
+	value: luau.Expression,
+	valueType: ts.Type,
 ) {
 	return createAssignmentExpression(
 		state,
-		writable.node,
-		wrapRightIfDoubleBinary(createBinaryFromOperator(readable, operator, value)),
+		writable,
+		"=",
+		wrapRightIfBinary(createBinaryFromOperator(state, readable, writableType, operator, value, valueType)),
 	);
 }
